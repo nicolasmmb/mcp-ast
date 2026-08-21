@@ -14,7 +14,7 @@ func TestScanSymbolsAndAnalyze(t *testing.T) {
 	files := map[string]string{
 		"a.go": `package a
 
-func Foo() int { return 1 }
+func Foo() int { x := 1; return x }
 `,
 		"b.go": `package b
 
@@ -86,7 +86,7 @@ func (t T) Bar() {}
 	if err != nil {
 		t.Fatal(err)
 	}
-	if text != "func Foo() int { return 1 }\n" {
+	if text != "func Foo() int { x := 1; return x }\n" {
 		t.Fatalf("get_text: %q", text)
 	}
 
@@ -95,7 +95,30 @@ func (t T) Bar() {}
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(full["functions"]) != 1 || full["functions"][0].Text != "func Foo() int { return 1 }" {
+	if len(full["functions"]) != 1 || full["functions"][0].Text != "func Foo() int { x := 1; return x }" {
 		t.Fatalf("include_text functions: %+v", full["functions"])
 	}
+
+	variables, errs, err := eng.ScanVariables(dir, golanglang.Go{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(errs) != 0 {
+		t.Fatalf("unexpected variable scan errors: %v", errs)
+	}
+	if len(variables) != 1 {
+		t.Fatalf("want 1 file with variables (a.go), got %d", len(variables))
+	}
+	if !containsName(variables[filepath.Join(dir, "a.go")], "x") {
+		t.Fatalf("a.go variables: %+v", variables[filepath.Join(dir, "a.go")])
+	}
+}
+
+func containsName(syms []Symbol, name string) bool {
+	for _, s := range syms {
+		if s.Name == name {
+			return true
+		}
+	}
+	return false
 }

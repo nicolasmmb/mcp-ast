@@ -11,6 +11,7 @@ Analisa arquivos e diretórios e expõe 7 tools por stdio:
 | `query_ast` | Queries tree-sitter customizadas |
 | `symbols` | Símbolos por tipo (classes, métodos, imports...) |
 | `scan_symbols` | Símbolos de um diretório inteiro |
+| `scan_variables` | Variáveis de um diretório inteiro |
 | `analyze` | Métricas de um arquivo |
 | `get_text` | Código exato de um range de posições |
 
@@ -269,9 +270,9 @@ Extrai símbolos de um arquivo agrupados por tipo, usando as queries embutidas d
 
 Tipos por linguagem:
 
-- **Java**: `classes`, `interfaces`, `enums`, `records`, `methods`, `constructors`, `fields`, `imports`
-- **Python**: `classes`, `functions`, `imports`
-- **Go**: `types`, `functions`, `methods`, `imports`
+- **Java**: `classes`, `interfaces`, `enums`, `records`, `methods`, `constructors`, `fields`, `variables`, `imports`
+- **Python**: `classes`, `functions`, `variables`, `imports`
+- **Go**: `types`, `functions`, `methods`, `variables`, `imports`
 
 **Request:**
 
@@ -354,6 +355,56 @@ Varre um diretório recursivamente e devolve os símbolos de todos os arquivos r
 ```
 
 `language` na resposta é `"auto"` quando detectado por arquivo, ou o nome informado. O exemplo acima resolveu o uso típico "pega as funções do repo inteiro" numa única chamada.
+
+---
+
+## `scan_variables`
+
+Varre um diretório recursivamente e devolve **apenas as variáveis** de todos os arquivos reconhecidos, agrupadas por caminho. Ignora pastas ocultas. Erros de arquivos individuais vão em `errors` em vez de abortar a varredura.
+
+O que é considerado variável por linguagem:
+
+- **Java**: variáveis locais (corpo de métodos, loops) — campos de classe ficam no kind `fields` do `symbols`
+- **Python**: atribuições (`x = ...`)
+- **Go**: `:=` (short var), `var` declarations e campos de struct
+
+**Argumentos:**
+
+| Campo | Tipo | Obrigatório | Descrição |
+|---|---|---|---|
+| `path` | string | sim | Diretório a varrer |
+| `language` | string | não | Restringe a uma linguagem; omitir = autodetect por arquivo |
+
+**Request:**
+
+```json
+{"name": "scan_variables", "arguments": {"path": "./src"}}
+```
+
+**Response:**
+
+```json
+{
+  "elapsed_ms": 12.5,
+  "language": "auto",
+  "variables": {
+    "src/Sample.java": [
+      { "name": "total", "text": "int total = 0;",
+        "start": {"row": 3, "col": 8}, "end": {"row": 3, "col": 22} },
+      { "name": "i", "text": "int i = 0;",
+        "start": {"row": 5, "col": 13}, "end": {"row": 5, "col": 23} }
+    ],
+    "src/demo.py": [
+      { "name": "count", "text": "count = 0",
+        "start": {"row": 2, "col": 0}, "end": {"row": 2, "col": 9} },
+      { "name": "name", "text": "name = who",
+        "start": {"row": 6, "col": 8}, "end": {"row": 6, "col": 18} }
+    ]
+  }
+}
+```
+
+Cada variável tem `name`, `text` (linha da declaração) e posições usáveis no `get_text`. Arquivos sem variáveis são omitidos do map.
 
 ---
 

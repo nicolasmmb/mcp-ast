@@ -27,6 +27,7 @@ func (Java) SymbolQueries() map[string]string {
 		"constructors": `(constructor_declaration name: (identifier) @name) @symbol`,
 		"fields":       `(field_declaration declarator: (variable_declarator name: (identifier) @name)) @symbol`,
 		"imports":      `(import_declaration) @symbol`,
+		"variables":    `(local_variable_declaration declarator: (variable_declarator name: (identifier) @name)) @symbol`,
 	}
 }
 

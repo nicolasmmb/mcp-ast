@@ -23,6 +23,7 @@ func (Go) SymbolQueries() map[string]string {
 		"functions": `(function_declaration name: (identifier) @name) @symbol`,
 		"methods":   `(method_declaration name: (field_identifier) @name) @symbol`,
 		"imports":   `(import_declaration) @symbol`,
+		"variables": `[(short_var_declaration left: (expression_list (identifier) @name)) (var_declaration (var_spec (identifier) @name)) (field_declaration name: (field_identifier) @name)] @symbol`,
 	}
 }
 

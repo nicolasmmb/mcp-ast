@@ -22,6 +22,7 @@ func (Python) SymbolQueries() map[string]string {
 		"classes":   `(class_definition name: (identifier) @name) @symbol`,
 		"functions": `(function_definition name: (identifier) @name) @symbol`,
 		"imports":   `[(import_statement) (import_from_statement)] @symbol`,
+		"variables": `(assignment left: (identifier) @name) @symbol`,
 	}
 }
 

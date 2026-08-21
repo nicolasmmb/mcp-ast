@@ -188,6 +188,22 @@ func hasExt(name string, exts []string) bool {
 	return false
 }
 
+// ScanVariables walks dir recursively and returns only the variables of every
+// recognized source file, grouped by file path. Mirrors ScanSymbols.
+func (e *Engine) ScanVariables(dir string, filter lang.Language) (map[string][]Symbol, map[string]string, error) {
+	files, errs, err := e.ScanSymbols(dir, filter)
+	if err != nil {
+		return nil, nil, err
+	}
+	variables := make(map[string][]Symbol)
+	for path, syms := range files {
+		if v, ok := syms["variables"]; ok && len(v) > 0 {
+			variables[path] = v
+		}
+	}
+	return variables, errs, nil
+}
+
 // KindMetric aggregates per-kind symbol metrics.
 type KindMetric struct {
 	Count    int     `json:"count"`

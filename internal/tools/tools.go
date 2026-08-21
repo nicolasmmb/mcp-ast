@@ -76,6 +76,10 @@ func Register(s *mcp.Server, eng *engine.Engine) {
 		Description: "Compute metrics for a source file: size, node count, nesting depth, and per-symbol-kind line statistics (count, avg/max lines).",
 	}, timed(t.analyze))
 	mcp.AddTool(s, &mcp.Tool{
+		Name:        "scan_variables",
+		Description: "Recursively scan a directory and return the variables of every recognized source file, grouped by file path. Errors reading individual files are reported per-file.",
+	}, timed(t.scanVariables))
+	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_text",
 		Description: "Return the exact source text of a 0-based (row, col) range, e.g. the positions reported on every node, capture or symbol. Use to read full code without truncation.",
 	}, timed(t.getText))
@@ -202,6 +206,38 @@ func (t *tools) scanSymbols(ctx context.Context, req *mcp.CallToolRequest, in sc
 		langName = filter.Name()
 	}
 	return nil, &scanSymbolsOutput{Language: langName, Files: files, Errors: errs}, nil
+}
+
+type scanVariablesInput struct {
+	Path     string `json:"path" jsonschema:"directory to scan recursively"`
+	Language string `json:"language,omitempty" jsonschema:"optional; language name (e.g. go). Omit to auto-detect each file by extension"`
+}
+
+type scanVariablesOutput struct {
+	Timed
+	Language  string                     `json:"language"`
+	Variables map[string][]engine.Symbol `json:"variables"`
+	Errors    map[string]string          `json:"errors,omitempty"`
+}
+
+func (t *tools) scanVariables(ctx context.Context, req *mcp.CallToolRequest, in scanVariablesInput) (*mcp.CallToolResult, *scanVariablesOutput, error) {
+	var filter lang.Language
+	if in.Language != "" {
+		var err error
+		filter, err = t.engine.Resolve(in.Language, in.Path)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	variables, errs, err := t.engine.ScanVariables(in.Path, filter)
+	if err != nil {
+		return nil, nil, err
+	}
+	langName := "auto"
+	if filter != nil {
+		langName = filter.Name()
+	}
+	return nil, &scanVariablesOutput{Language: langName, Variables: variables, Errors: errs}, nil
 }
 
 type analyzeInput struct {
