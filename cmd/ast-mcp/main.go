@@ -17,6 +17,7 @@ import (
 	golanglang "mcp-ast/internal/languages/go"
 	"mcp-ast/internal/languages/java"
 	"mcp-ast/internal/languages/python"
+	"mcp-ast/internal/languages/rust"
 	"mcp-ast/internal/tools"
 )
 
@@ -43,7 +44,7 @@ func main() {
 	tools.SetLogger(logger)
 
 	reg := lang.NewRegistry()
-	for _, l := range []lang.Language{java.Java{}, python.Python{}, golanglang.Go{}} {
+	for _, l := range []lang.Language{java.Java{}, python.Python{}, golanglang.Go{}, rust.Rust{}} {
 		if err := reg.Register(l); err != nil {
 			log.Fatalf("registering language: %v", err)
 		}
