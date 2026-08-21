@@ -122,6 +122,86 @@ Ou baixe o binário pronto de uma [release](https://github.com/nicolasmmb/mcp-as
 
 Releases são geradas automaticamente: a cada push em `main` um workflow calcula a próxima versão (`feat:` → minor, senão patch), cria a tag `vX.Y.Z` e publica os binários (com checksum `.sha256`).
 
+## Como usar o MCP
+
+O servidor fala **MCP por stdio**: lê mensagens JSON-RPC da entrada padrão e responde na saída padrão. Qualquer cliente MCP (agente, editor, CLI) que o execute como processo local ganha as 14 tools automaticamente.
+
+### 1. Obtenha o binário
+
+Baixe de uma [release](https://github.com/nicolasmmb/mcp-ast/releases) o binário da sua plataforma, torne-o executável e coloque-o no `PATH`:
+
+```bash
+# exemplo (macOS arm64)
+curl -sSL -o /usr/local/bin/ast-mcp https://github.com/nicolasmmb/mcp-ast/releases/latest/download/ast-mcp-darwin-arm64
+chmod +x /usr/local/bin/ast-mcp
+```
+
+> Cada binário tem um `.sha256` na release para verificar a integridade:
+> `shasum -a 256 -c ast-mcp-darwin-arm64.sha256` (macOS/Linux) ou
+> `Get-FileHash ast-mcp-windows-amd64.exe` (Windows).
+
+Ou compile localmente (Go 1.26+):
+
+```bash
+go build -o ast-mcp ./cmd/ast-mcp
+```
+
+### 2. Configure o cliente
+
+**opencode** (`opencode.json` na raiz do projeto):
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "ast-mcp": {
+      "type": "local",
+      "command": ["/usr/local/bin/ast-mcp"]
+    }
+  }
+}
+```
+
+**Claude Code** (config do projeto ou global):
+
+```json
+{ "mcpServers": { "ast-mcp": { "command": "/usr/local/bin/ast-mcp" } } }
+```
+
+**Claude Desktop** (`claude_desktop_config.json`):
+
+```json
+{ "mcpServers": { "ast-mcp": { "command": "/usr/local/bin/ast-mcp" } } }
+```
+
+**Outros clientes** (VS Code, Cursor, JetBrains, etc.) seguem o mesmo padrão `mcpServers` — basta apontar `command` para o caminho do binário.
+
+Reinicie o cliente após configurar.
+
+### 3. Verifique a conexão
+
+Sem cliente, teste o servidor por stdio (as três mensagens são o handshake `initialize` + `notifications/initialized` + `tools/list`; o `sleep` dá tempo da resposta antes do EOF):
+
+```bash
+( printf '%s\n' \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}' \
+    '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'; sleep 1 ) \
+  | /usr/local/bin/ast-mcp
+```
+
+A resposta ao `initialize` traz `serverInfo` (name `ast-mcp`, version = a tag da release, ex.: `v0.1.3`; localmente `dev`), e o `tools/list` retorna as 14 tools.
+
+### 4. Chame as tools
+
+Conectado, as 14 tools aparecem como ferramentas nativas do agente — peça em linguagem natural ("qual a complexidade de `src/foo.go`?") ou invoque direto. Por baixo é o método MCP `tools/call`:
+
+```json
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"complexity_file","arguments":{"path":"src/foo.go"}}}
+```
+
+Cada tool — argumentos, exemplos de request/response e convenções de posição — está documentada na seção [# Tools](#tools) abaixo.
+
 ## Commits, tags e versões
 
 ### Como commitar e publicar
@@ -161,28 +241,6 @@ ci: ajusta workflow                 # → patch
 ```
 
 Binários reportam a versão do release via `-X main.version=vX.Y.Z` (campo `version` do servidor; localmente sem tag é `dev`).
-
-Servidor stdio — funciona com qualquer cliente MCP. Exemplo de config opencode (`opencode.json`):
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "ast-mcp": {
-      "type": "local",
-      "command": ["/caminho/absoluto/ast-mcp"]
-    }
-  }
-}
-```
-
-Claude Code / Desktop:
-
-```json
-{ "mcpServers": { "ast-mcp": { "command": "/caminho/absoluto/ast-mcp" } } }
-```
-
-Reinicie o cliente após configurar.
 
 ---
 
