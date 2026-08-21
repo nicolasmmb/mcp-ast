@@ -91,6 +91,10 @@ func Register(s *mcp.Server, eng *engine.Engine) {
 		Name:        "complexity_file",
 		Description: "Compute cyclomatic complexity (1 + decision points) for every function and method in a source file. Branches, loops, switch cases, ternaries and logical operators add to the score.",
 	}, timed(t.complexity))
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "unused_symbols_dir",
+		Description: "Find symbols declared but never referenced across a directory. Heuristic: a symbol whose name appears exactly once in all recognized files is unused.",
+	}, timed(t.unusedSymbols))
 }
 
 type listLanguagesInput struct{}
@@ -342,4 +346,37 @@ func (t *tools) complexity(ctx context.Context, req *mcp.CallToolRequest, in com
 		return nil, nil, err
 	}
 	return nil, &complexityOutput{Language: l.Name(), Entries: entries}, nil
+}
+
+type unusedSymbolsInput struct {
+	Path     string `json:"path" jsonschema:"directory to scan recursively"`
+	Language string `json:"language,omitempty" jsonschema:"optional; language name (e.g. go). Omit to auto-detect each file by extension"`
+	Limit    int    `json:"limit,omitempty" jsonschema:"optional; maximum number of results, 0 = unlimited"`
+}
+
+type unusedSymbolsOutput struct {
+	Timed
+	Language string               `json:"language"`
+	Symbols  []engine.SearchMatch `json:"symbols"`
+	Errors   map[string]string    `json:"errors,omitempty"`
+}
+
+func (t *tools) unusedSymbols(ctx context.Context, req *mcp.CallToolRequest, in unusedSymbolsInput) (*mcp.CallToolResult, *unusedSymbolsOutput, error) {
+	var filter lang.Language
+	if in.Language != "" {
+		var err error
+		filter, err = t.engine.Resolve(in.Language, in.Path)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	result, err := t.engine.UnusedSymbols(ctx, in.Path, filter, in.Limit)
+	if err != nil {
+		return nil, nil, err
+	}
+	langName := "auto"
+	if filter != nil {
+		langName = filter.Name()
+	}
+	return nil, &unusedSymbolsOutput{Language: langName, Symbols: result.Matches, Errors: result.Errors}, nil
 }

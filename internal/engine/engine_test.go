@@ -244,6 +244,47 @@ func Branches(x int) int {
 	}
 }
 
+func TestUnusedSymbols(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"a.go": `package a
+
+func Used() int { return 1 }
+
+func Unused() int { return 2 }
+`,
+		"b.go": `package b
+
+func caller() int { return a.Used() }
+`,
+	}
+	for name, src := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reg := lang.NewRegistry()
+	if err := reg.Register(golanglang.Go{}); err != nil {
+		t.Fatal(err)
+	}
+	eng := New(reg)
+
+	result, err := eng.UnusedSymbols(context.Background(), dir, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unused := map[string]bool{}
+	for _, m := range result.Matches {
+		unused[m.Name] = true
+	}
+	if !unused["Unused"] {
+		t.Fatalf("Unused should be flagged, got %+v", result.Matches)
+	}
+	if unused["Used"] {
+		t.Fatalf("Used should NOT be flagged, got %+v", result.Matches)
+	}
+}
+
 func TestScanCancelled(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\nfunc Foo() int { return 1 }\n"), 0o644); err != nil {

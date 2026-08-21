@@ -16,6 +16,7 @@ Analisa arquivos e diretórios e expõe 7 tools por stdio:
 | `scan_variables_dir` | Variáveis de um diretório inteiro |
 | `search_name_dir` | Busca um nome em arquivos de um diretório |
 | `complexity_file` | Complexidade ciclomática por função |
+| `unused_symbols_dir` | Símbolos declarados mas nunca referenciados |
 
 Toda tool devolve `elapsed_ms` (tempo de processamento da consulta em milissegundos) junto com o resultado.
 
@@ -569,6 +570,40 @@ Regra da complexidade ciclomática: cada `if`/`for`/`while`/`switch`/`case`/tern
 
 ---
 
+## `unused_symbols_dir`
+
+Símbolos **declarados mas nunca referenciados** (dead code) em um diretório. Heurística: um símbolo cujo nome aparece **exatamente uma vez** em todos os arquivos reconhecidos é considerado não usado — a única ocorrência é a própria declaração.
+
+**Argumentos:**
+
+| Campo | Tipo | Obrigatório | Descrição |
+|---|---|---|---|
+| `path` | string | sim | Diretório para buscar recursivamente |
+| `language` | string | não | Filtrar por linguagem. Omitir para auto |
+| `limit` | int | não | Máximo de resultados (0 = sem limite) |
+
+**Request:**
+
+```json
+{"name": "unused_symbols_dir", "arguments": {"path": "./src"}}
+```
+
+**Response:**
+
+```json
+{
+  "elapsed_ms": 13.5,
+  "language": "auto",
+  "symbols": [
+    {"file": "internal/engine/engine.go", "kind": "methods", "name": "ListLanguages", "line": 59, "col": 0, "text": "func (e *Engine) ListLanguages() []string { ... }"}
+  ]
+}
+```
+
+**Limitações da heurística** (`ponytail:` trade-off): contagem textual de ocorrências, não análise de referências semântica. Comentários e strings contam como uso (nunca marca falso-unused, mas pode **deixar passar** um símbolo de fato não usado que aparece num comentário). O resultado é por diretório: um símbolo usado **fora** do diretório varrido aparece como unused.
+
+---
+
 # Notas de design
 
 - **`text` truncado por padrão**: para manter os outputs pequenos, `text` vem como a primeira linha do nó (até 200 chars). O corpo completo é obtido com `include_text: true` (`symbols_file`/`query_ast_file`) ou via `get_text_file`. Isso evita que listar símbolos de um arquivo grande exploda o contexto.
@@ -578,6 +613,6 @@ Regra da complexidade ciclomática: cada `if`/`for`/`while`/`switch`/`case`/tern
 # Testes
 
 ```bash
-go test ./...   # parse + símbolos por linguagem; engine (scan, analyze, query, get_text, include_text, search, complexity)
+go test ./...   # parse + símbolos por linguagem; engine (scan, analyze, query, get_text, include_text, search, complexity, unused)
 go vet ./...    # gofmt limpo
 ```
