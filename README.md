@@ -2,7 +2,7 @@
 
 Servidor [MCP](https://modelcontextprotocol.io) em Go para análise de AST de múltiplas linguagens usando [tree-sitter](https://github.com/tree-sitter/go-tree-sitter) e o [Go SDK oficial](https://github.com/modelcontextprotocol/go-sdk).
 
-Analisa arquivos e diretórios e expõe 7 tools por stdio:
+Analisa arquivos e diretórios e expõe 14 tools por stdio:
 
 | Tool | Função |
 |---|---|
@@ -23,6 +23,27 @@ Analisa arquivos e diretórios e expõe 7 tools por stdio:
 
 Toda tool devolve `elapsed_ms` (tempo de processamento da consulta em milissegundos) junto com o resultado.
 
+**Referência rápida — o que cada tool retorna:**
+
+| Tool | Campos do output |
+|---|---|
+| `list_languages` | `languages: string[]` |
+| `parse_ast_file` | `language`, `path`, `has_error: bool`, `ast: Node` |
+| `query_ast_file` | `language`, `matches: [{captures: [{name, text, start, end}]}]` |
+| `symbols_file` | `language`, `symbols: {kind: [{name, text, start, end}]}` |
+| `scan_symbols_dir` | `language`, `files: {path: {kind: [...]}}`, `errors?` |
+| `scan_variables_dir` | `language`, `variables: {path: [{name, text, start, end}]}`, `errors?` |
+| `analyze_file` | `language`, `metrics: {lines, bytes, nodes, max_nesting, kinds}` |
+| `get_text_file` | `language`, `path`, `text: string` |
+| `search_name_dir` | `total`, `matches: [{file, kind, name, line, col, text}]`, `errors?` |
+| `complexity_file` | `language`, `entries: [{name, kind, complexity, start, end}]` |
+| `unused_symbols_dir` | `language`, `symbols: [{file, kind, name, line, col, text}]`, `errors?` |
+| `rename_preview_dir` | `language`, `matches: [{file, line, col, text, definition: bool}]`, `errors?` |
+| `call_graph_file` | `language`, `functions: [{name, kind, callees: [{name, count}], start, end}]` |
+| `callers_dir` | `language`, `callers: [{file, name, kind, line, col, count}]`, `errors?` |
+
+`Node` = `{type, field?, named, start: {row, col}, end: {row, col}, children?}`. Posições são 0-based.
+
 ## Estrutura
 
 ```
@@ -31,7 +52,7 @@ mcp-ast/
 ├── internal/
 │   ├── lang/lang.go           # interface Language + registry com pool de parsers
 │   ├── engine/engine.go       # parse, AST→JSON, queries, símbolos, métricas (genérico)
-│   ├── tools/tools.go         # handlers das 7 tools MCP
+│   ├── tools/tools.go         # handlers das 14 tools MCP
 │   ├── tools/timing.go        # wrapper que injeta elapsed_ms em toda tool
 │   └── languages/
 │       ├── java/java.go       # gramática Java + queries de símbolos
@@ -49,8 +70,14 @@ type Language interface {
     Extensions() []string               // [".java"]
     Language() *ts.Language             // gramática tree-sitter
     SymbolQueries() map[string]string   // queries nomeadas por tipo de símbolo
+    DecisionKinds() []string            // kinds que somam 1 na complexidade ciclomática
+    AuxQueries() map[string]string      // queries auxiliares (identifiers, calls)
 }
 ```
+
+`AuxQueries` alimenta as tools avançadas:
+- `"identifiers"` — captura todo identificador como `@id` (usa o `rename_preview_dir`)
+- `"calls"` — captura o callee de cada call como `@callee` (usa `call_graph_file`/`callers_dir`)
 
 Adicionar uma linguagem = 1 arquivo novo (ex. `internal/languages/python/python.go`) + 1 linha no slice do `main.go`. Engine e tools são 100% genéricos — não conhecem nenhuma gramática.
 
