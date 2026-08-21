@@ -7,6 +7,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"mcp-java-ast/internal/engine"
+	"mcp-java-ast/internal/lang"
 )
 
 type tools struct {
@@ -66,6 +67,18 @@ func Register(s *mcp.Server, eng *engine.Engine) {
 		Name:        "symbols",
 		Description: "Extract symbols (classes, methods, fields, imports, ...) from a source file, grouped by kind, using the language's built-in queries.",
 	}, timed(t.symbols))
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "scan_symbols",
+		Description: "Recursively scan a directory and return symbols of every recognized source file, grouped by file path. Errors reading individual files are reported per-file.",
+	}, timed(t.scanSymbols))
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "analyze",
+		Description: "Compute metrics for a source file: size, node count, nesting depth, and per-symbol-kind line statistics (count, avg/max lines).",
+	}, timed(t.analyze))
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "get_text",
+		Description: "Return the exact source text of a 0-based (row, col) range, e.g. the positions reported on every node, capture or symbol. Use to read full code without truncation.",
+	}, timed(t.getText))
 }
 
 type listLanguagesInput struct{}
@@ -110,9 +123,10 @@ func (t *tools) parseAST(ctx context.Context, req *mcp.CallToolRequest, in parse
 }
 
 type queryASTInput struct {
-	Language string `json:"language" jsonschema:"language name, e.g. java"`
+	Language string `json:"language,omitempty" jsonschema:"optional; language name, e.g. java. Omit to auto-detect from the file extension"`
 	Path     string `json:"path" jsonschema:"path to the source file to query"`
 	Query    string `json:"query" jsonschema:"tree-sitter query, e.g. (method_declaration name: (identifier) @name) @method"`
+	Limit    int    `json:"limit,omitempty" jsonschema:"optional; maximum number of matches to return, 0 = unlimited"`
 }
 
 type queryASTOutput struct {
@@ -126,7 +140,7 @@ func (t *tools) queryAST(ctx context.Context, req *mcp.CallToolRequest, in query
 	if err != nil {
 		return nil, nil, err
 	}
-	matches, err := t.engine.Query(l, in.Path, in.Query)
+	matches, err := t.engine.QueryLimit(l, in.Path, in.Query, in.Limit)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -154,4 +168,87 @@ func (t *tools) symbols(ctx context.Context, req *mcp.CallToolRequest, in symbol
 		return nil, nil, err
 	}
 	return nil, &symbolsOutput{Language: l.Name(), Symbols: syms}, nil
+}
+
+type scanSymbolsInput struct {
+	Path     string `json:"path" jsonschema:"directory to scan recursively"`
+	Language string `json:"language,omitempty" jsonschema:"optional; language name (e.g. go). Omit to auto-detect each file by extension"`
+}
+
+type scanSymbolsOutput struct {
+	Timed
+	Language string                                `json:"language"`
+	Files    map[string]map[string][]engine.Symbol `json:"files"`
+	Errors   map[string]string                     `json:"errors,omitempty"`
+}
+
+func (t *tools) scanSymbols(ctx context.Context, req *mcp.CallToolRequest, in scanSymbolsInput) (*mcp.CallToolResult, *scanSymbolsOutput, error) {
+	var filter lang.Language
+	if in.Language != "" {
+		var err error
+		filter, err = t.engine.Resolve(in.Language, in.Path)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	files, errs, err := t.engine.ScanSymbols(in.Path, filter)
+	if err != nil {
+		return nil, nil, err
+	}
+	langName := "auto"
+	if filter != nil {
+		langName = filter.Name()
+	}
+	return nil, &scanSymbolsOutput{Language: langName, Files: files, Errors: errs}, nil
+}
+
+type analyzeInput struct {
+	Language string `json:"language,omitempty" jsonschema:"optional; language name, e.g. java. Omit to auto-detect from the file extension"`
+	Path     string `json:"path" jsonschema:"path to the source file to analyze"`
+}
+
+type analyzeOutput struct {
+	Timed
+	Language string          `json:"language"`
+	Metrics  *engine.Metrics `json:"metrics"`
+}
+
+func (t *tools) analyze(ctx context.Context, req *mcp.CallToolRequest, in analyzeInput) (*mcp.CallToolResult, *analyzeOutput, error) {
+	l, err := t.engine.Resolve(in.Language, in.Path)
+	if err != nil {
+		return nil, nil, err
+	}
+	metrics, err := t.engine.Analyze(l, in.Path)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, &analyzeOutput{Language: l.Name(), Metrics: metrics}, nil
+}
+
+type getTextInput struct {
+	Language string `json:"language,omitempty" jsonschema:"optional; language name, e.g. java. Omit to auto-detect from the file extension"`
+	Path     string `json:"path" jsonschema:"path to the source file"`
+	StartRow int    `json:"start_row" jsonschema:"0-based start row (inclusive)"`
+	StartCol int    `json:"start_col" jsonschema:"0-based start byte column (inclusive)"`
+	EndRow   int    `json:"end_row" jsonschema:"0-based end row (exclusive)"`
+	EndCol   int    `json:"end_col" jsonschema:"0-based end byte column (exclusive)"`
+}
+
+type getTextOutput struct {
+	Timed
+	Language string `json:"language"`
+	Path     string `json:"path"`
+	Text     string `json:"text"`
+}
+
+func (t *tools) getText(ctx context.Context, req *mcp.CallToolRequest, in getTextInput) (*mcp.CallToolResult, *getTextOutput, error) {
+	l, err := t.engine.Resolve(in.Language, in.Path)
+	if err != nil {
+		return nil, nil, err
+	}
+	text, err := t.engine.GetText(l, in.Path, engine.Point{Row: in.StartRow, Col: in.StartCol}, engine.Point{Row: in.EndRow, Col: in.EndCol})
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, &getTextOutput{Language: l.Name(), Path: in.Path, Text: text}, nil
 }

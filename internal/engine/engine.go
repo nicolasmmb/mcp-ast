@@ -1,8 +1,11 @@
 package engine
 
 import (
+	"bytes"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 
 	ts "github.com/tree-sitter/go-tree-sitter"
@@ -70,12 +73,19 @@ func (e *Engine) Parse(l lang.Language, path string, maxDepth int) (*Node, bool,
 // Query runs a tree-sitter query over the file and returns one Match per
 // pattern match, with every capture's name, text and position.
 func (e *Engine) Query(l lang.Language, path, querySrc string) ([]Match, error) {
+	return e.QueryLimit(l, path, querySrc, 0)
+}
+
+// QueryLimit runs a tree-sitter query over the file and returns one Match per
+// pattern match, with every capture's name, text and position. limit caps the
+// number of matches (0 = unlimited).
+func (e *Engine) QueryLimit(l lang.Language, path, querySrc string, limit int) ([]Match, error) {
 	src, tree, err := e.parseFile(l, path)
 	if err != nil {
 		return nil, err
 	}
 	defer tree.Close()
-	return e.runQuery(l, src, tree.RootNode(), querySrc)
+	return e.runQuery(l, src, tree.RootNode(), querySrc, limit)
 }
 
 // Symbols runs the language's built-in symbol queries and returns the
@@ -88,7 +98,7 @@ func (e *Engine) Symbols(l lang.Language, path string) (map[string][]Symbol, err
 	defer tree.Close()
 	out := make(map[string][]Symbol)
 	for kind, qs := range l.SymbolQueries() {
-		matches, err := e.runQuery(l, src, tree.RootNode(), qs)
+		matches, err := e.runQuery(l, src, tree.RootNode(), qs, 0)
 		if err != nil {
 			return nil, fmt.Errorf("symbol query %q: %w", kind, err)
 		}
@@ -114,6 +124,163 @@ func (e *Engine) Symbols(l lang.Language, path string) (map[string][]Symbol, err
 	return out, nil
 }
 
+// ScanSymbols walks dir recursively and collects symbols for every file that
+// matches the language's extensions (or auto-detected when filter is nil).
+// Unreadable/unparseable files are reported in errors instead of failing.
+func (e *Engine) ScanSymbols(dir string, filter lang.Language) (map[string]map[string][]Symbol, map[string]string, error) {
+	files := make(map[string]map[string][]Symbol)
+	errs := make(map[string]string)
+	walk := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if path != dir && strings.HasPrefix(d.Name(), ".") {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		var l lang.Language
+		if filter != nil {
+			if !hasExt(d.Name(), filter.Extensions()) {
+				return nil
+			}
+			l = filter
+		} else {
+			ll, err := e.reg.Resolve("", path)
+			if err != nil {
+				return nil
+			}
+			l = ll
+		}
+		syms, err := e.Symbols(l, path)
+		if err != nil {
+			errs[path] = err.Error()
+			return nil
+		}
+		files[path] = syms
+		return nil
+	})
+	if err := walk; err != nil {
+		return nil, nil, err
+	}
+	return files, errs, nil
+}
+
+func hasExt(name string, exts []string) bool {
+	for _, x := range exts {
+		if strings.HasSuffix(name, x) {
+			return true
+		}
+	}
+	return false
+}
+
+// KindMetric aggregates per-kind symbol metrics.
+type KindMetric struct {
+	Count    int     `json:"count"`
+	AvgLines float64 `json:"avg_lines"`
+	MaxLines int     `json:"max_lines"`
+}
+
+// Metrics is the per-file analysis report.
+type Metrics struct {
+	Lines      int                   `json:"lines"`
+	Bytes      int                   `json:"bytes"`
+	Nodes      int                   `json:"nodes"`
+	MaxNesting int                   `json:"max_nesting"`
+	Kinds      map[string]KindMetric `json:"kinds"`
+}
+
+// Analyze computes file-level metrics (size, node count, nesting depth) and
+// per-symbol-kind line statistics using the language's built-in queries.
+func (e *Engine) Analyze(l lang.Language, path string) (*Metrics, error) {
+	src, tree, err := e.parseFile(l, path)
+	if err != nil {
+		return nil, err
+	}
+	defer tree.Close()
+	m := &Metrics{
+		Lines: bytes.Count(src, []byte("\n")) + 1,
+		Bytes: len(src),
+		Kinds: make(map[string]KindMetric),
+	}
+	m.Nodes, m.MaxNesting = countNodes(tree.RootNode())
+	for kind, qs := range l.SymbolQueries() {
+		matches, err := e.runQuery(l, src, tree.RootNode(), qs, 0)
+		if err != nil {
+			return nil, fmt.Errorf("symbol query %q: %w", kind, err)
+		}
+		km := KindMetric{Count: len(matches)}
+		total := 0
+		for _, mt := range matches {
+			for _, c := range mt.Captures {
+				if c.Name == "symbol" {
+					lines := c.End.Row - c.Start.Row + 1
+					total += lines
+					if lines > km.MaxLines {
+						km.MaxLines = lines
+					}
+				}
+			}
+		}
+		if km.Count > 0 {
+			km.AvgLines = float64(total) / float64(km.Count)
+		}
+		m.Kinds[kind] = km
+	}
+	return m, nil
+}
+
+func countNodes(n *ts.Node) (nodes, maxDepth int) {
+	var walk func(*ts.Node, int)
+	walk = func(nn *ts.Node, depth int) {
+		nodes++
+		if depth > maxDepth {
+			maxDepth = depth
+		}
+		for i := uint(0); i < nn.ChildCount(); i++ {
+			walk(nn.Child(i), depth+1)
+		}
+	}
+	walk(n, 1)
+	return
+}
+
+// GetText returns the exact source slice of a 0-based (row, col) range,
+// e.g. the positions reported on every Node/Capture/Symbol.
+func (e *Engine) GetText(l lang.Language, path string, start, end Point) (string, error) {
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("reading %s: %w", path, err)
+	}
+	s := byteOffset(src, start.Row, start.Col)
+	en := byteOffset(src, end.Row, end.Col)
+	if en < s {
+		return "", fmt.Errorf("end position %+v precedes start %+v", end, start)
+	}
+	if en > len(src) {
+		en = len(src)
+	}
+	return string(src[s:en]), nil
+}
+
+// byteOffset maps a 0-based (row, col) to a byte offset. col is a byte column.
+func byteOffset(src []byte, row, col int) int {
+	off := 0
+	for r := 0; r < row; r++ {
+		nl := bytes.IndexByte(src[off:], '\n')
+		if nl < 0 {
+			return len(src)
+		}
+		off += nl + 1
+	}
+	if off+col > len(src) {
+		return len(src)
+	}
+	return off + col
+}
+
 func (e *Engine) parseFile(l lang.Language, path string) ([]byte, *ts.Tree, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
@@ -124,7 +291,7 @@ func (e *Engine) parseFile(l lang.Language, path string) ([]byte, *ts.Tree, erro
 	return src, p.Parse(src, nil), nil
 }
 
-func (e *Engine) runQuery(l lang.Language, src []byte, root *ts.Node, querySrc string) ([]Match, error) {
+func (e *Engine) runQuery(l lang.Language, src []byte, root *ts.Node, querySrc string, limit int) ([]Match, error) {
 	q, qerr := ts.NewQuery(l.Language(), querySrc)
 	if qerr != nil {
 		return nil, fmt.Errorf("invalid query: %s", qerr.Message)
@@ -134,10 +301,10 @@ func (e *Engine) runQuery(l lang.Language, src []byte, root *ts.Node, querySrc s
 	defer c.Close()
 	names := q.CaptureNames()
 
-	var matches []Match
+	matches := []Match{}
 	it := c.Matches(q, root, src)
 	for m := it.Next(); m != nil; m = it.Next() {
-		match := Match{}
+		match := Match{Captures: []Capture{}}
 		for _, cap := range m.Captures {
 			match.Captures = append(match.Captures, Capture{
 				Name:  names[cap.Index],
@@ -147,6 +314,9 @@ func (e *Engine) runQuery(l lang.Language, src []byte, root *ts.Node, querySrc s
 			})
 		}
 		matches = append(matches, match)
+		if limit > 0 && len(matches) >= limit {
+			break
+		}
 	}
 	return matches, nil
 }
