@@ -123,10 +123,11 @@ func (t *tools) parseAST(ctx context.Context, req *mcp.CallToolRequest, in parse
 }
 
 type queryASTInput struct {
-	Language string `json:"language,omitempty" jsonschema:"optional; language name, e.g. java. Omit to auto-detect from the file extension"`
-	Path     string `json:"path" jsonschema:"path to the source file to query"`
-	Query    string `json:"query" jsonschema:"tree-sitter query, e.g. (method_declaration name: (identifier) @name) @method"`
-	Limit    int    `json:"limit,omitempty" jsonschema:"optional; maximum number of matches to return, 0 = unlimited"`
+	Language    string `json:"language,omitempty" jsonschema:"optional; language name, e.g. java. Omit to auto-detect from the file extension"`
+	Path        string `json:"path" jsonschema:"path to the source file to query"`
+	Query       string `json:"query" jsonschema:"tree-sitter query, e.g. (method_declaration name: (identifier) @name) @method"`
+	Limit       int    `json:"limit,omitempty" jsonschema:"optional; maximum number of matches to return, 0 = unlimited"`
+	IncludeText bool   `json:"include_text,omitempty" jsonschema:"optional; include full node text in captures instead of the first-line summary"`
 }
 
 type queryASTOutput struct {
@@ -140,7 +141,7 @@ func (t *tools) queryAST(ctx context.Context, req *mcp.CallToolRequest, in query
 	if err != nil {
 		return nil, nil, err
 	}
-	matches, err := t.engine.QueryLimit(l, in.Path, in.Query, in.Limit)
+	matches, err := t.engine.QueryText(l, in.Path, in.Query, in.Limit, in.IncludeText)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -148,8 +149,9 @@ func (t *tools) queryAST(ctx context.Context, req *mcp.CallToolRequest, in query
 }
 
 type symbolsInput struct {
-	Language string `json:"language,omitempty" jsonschema:"optional; language name, e.g. java. Omit to auto-detect from the file extension"`
-	Path     string `json:"path" jsonschema:"path to the source file to analyze"`
+	Language    string `json:"language,omitempty" jsonschema:"optional; language name, e.g. java. Omit to auto-detect from the file extension"`
+	Path        string `json:"path" jsonschema:"path to the source file to analyze"`
+	IncludeText bool   `json:"include_text,omitempty" jsonschema:"optional; include full symbol text instead of the first-line summary"`
 }
 
 type symbolsOutput struct {
@@ -163,7 +165,7 @@ func (t *tools) symbols(ctx context.Context, req *mcp.CallToolRequest, in symbol
 	if err != nil {
 		return nil, nil, err
 	}
-	syms, err := t.engine.Symbols(l, in.Path)
+	syms, err := t.engine.SymbolsText(l, in.Path, in.IncludeText)
 	if err != nil {
 		return nil, nil, err
 	}

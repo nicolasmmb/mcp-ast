@@ -80,17 +80,29 @@ func (e *Engine) Query(l lang.Language, path, querySrc string) ([]Match, error) 
 // pattern match, with every capture's name, text and position. limit caps the
 // number of matches (0 = unlimited).
 func (e *Engine) QueryLimit(l lang.Language, path, querySrc string, limit int) ([]Match, error) {
+	return e.QueryText(l, path, querySrc, limit, false)
+}
+
+// QueryText is QueryLimit with a fullText switch: when true, capture text is
+// the full node source instead of the first-line summary.
+func (e *Engine) QueryText(l lang.Language, path, querySrc string, limit int, fullText bool) ([]Match, error) {
 	src, tree, err := e.parseFile(l, path)
 	if err != nil {
 		return nil, err
 	}
 	defer tree.Close()
-	return e.runQuery(l, src, tree.RootNode(), querySrc, limit)
+	return e.runQuery(l, src, tree.RootNode(), querySrc, limit, fullText)
 }
 
 // Symbols runs the language's built-in symbol queries and returns the
 // results grouped by kind (classes, methods, fields, imports, ...).
 func (e *Engine) Symbols(l lang.Language, path string) (map[string][]Symbol, error) {
+	return e.SymbolsText(l, path, false)
+}
+
+// SymbolsText is Symbols with a fullText switch: when true, symbol text is the
+// full node source instead of the first-line summary.
+func (e *Engine) SymbolsText(l lang.Language, path string, fullText bool) (map[string][]Symbol, error) {
 	src, tree, err := e.parseFile(l, path)
 	if err != nil {
 		return nil, err
@@ -98,7 +110,7 @@ func (e *Engine) Symbols(l lang.Language, path string) (map[string][]Symbol, err
 	defer tree.Close()
 	out := make(map[string][]Symbol)
 	for kind, qs := range l.SymbolQueries() {
-		matches, err := e.runQuery(l, src, tree.RootNode(), qs, 0)
+		matches, err := e.runQuery(l, src, tree.RootNode(), qs, 0, fullText)
 		if err != nil {
 			return nil, fmt.Errorf("symbol query %q: %w", kind, err)
 		}
@@ -207,7 +219,7 @@ func (e *Engine) Analyze(l lang.Language, path string) (*Metrics, error) {
 	}
 	m.Nodes, m.MaxNesting = countNodes(tree.RootNode())
 	for kind, qs := range l.SymbolQueries() {
-		matches, err := e.runQuery(l, src, tree.RootNode(), qs, 0)
+		matches, err := e.runQuery(l, src, tree.RootNode(), qs, 0, false)
 		if err != nil {
 			return nil, fmt.Errorf("symbol query %q: %w", kind, err)
 		}
@@ -291,7 +303,7 @@ func (e *Engine) parseFile(l lang.Language, path string) ([]byte, *ts.Tree, erro
 	return src, p.Parse(src, nil), nil
 }
 
-func (e *Engine) runQuery(l lang.Language, src []byte, root *ts.Node, querySrc string, limit int) ([]Match, error) {
+func (e *Engine) runQuery(l lang.Language, src []byte, root *ts.Node, querySrc string, limit int, fullText bool) ([]Match, error) {
 	q, qerr := ts.NewQuery(l.Language(), querySrc)
 	if qerr != nil {
 		return nil, fmt.Errorf("invalid query: %s", qerr.Message)
@@ -306,9 +318,13 @@ func (e *Engine) runQuery(l lang.Language, src []byte, root *ts.Node, querySrc s
 	for m := it.Next(); m != nil; m = it.Next() {
 		match := Match{Captures: []Capture{}}
 		for _, cap := range m.Captures {
+			text := cap.Node.Utf8Text(src)
+			if !fullText {
+				text = firstLine(text)
+			}
 			match.Captures = append(match.Captures, Capture{
 				Name:  names[cap.Index],
-				Text:  firstLine(cap.Node.Utf8Text(src)),
+				Text:  text,
 				Start: point(cap.Node.StartPosition()),
 				End:   point(cap.Node.EndPosition()),
 			})

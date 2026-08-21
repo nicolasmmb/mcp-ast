@@ -89,4 +89,13 @@ func (t T) Bar() {}
 	if text != "func Foo() int { return 1 }\n" {
 		t.Fatalf("get_text: %q", text)
 	}
+
+	// symbols with include_text must carry the full function body
+	full, err := eng.SymbolsText(golanglang.Go{}, filepath.Join(dir, "a.go"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(full["functions"]) != 1 || full["functions"][0].Text != "func Foo() int { return 1 }" {
+		t.Fatalf("include_text functions: %+v", full["functions"])
+	}
 }
