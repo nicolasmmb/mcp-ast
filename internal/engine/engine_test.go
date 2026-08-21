@@ -122,3 +122,70 @@ func containsName(syms []Symbol, name string) bool {
 	}
 	return false
 }
+
+func TestSearchName(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"a.go": `package a
+
+func Foo() int { x := 1; return x }
+`,
+		"b.go": `package b
+
+type T struct{}
+
+func (t T) Bar() {}
+`,
+	}
+	for name, src := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	reg := lang.NewRegistry()
+	if err := reg.Register(golanglang.Go{}); err != nil {
+		t.Fatal(err)
+	}
+	eng := New(reg)
+
+	// find declarations of Foo
+	result, err := eng.SearchName(dir, "Foo", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 1 {
+		t.Fatalf("want 1 match for Foo, got %d", result.Total)
+	}
+	m := result.Matches[0]
+	if m.File != filepath.Join(dir, "a.go") || m.Kind != "functions" || m.Line != 3 {
+		t.Fatalf("unexpected match: %+v", m)
+	}
+
+	// a name that only appears as a type declaration
+	result, err = eng.SearchName(dir, "T", "go", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 1 || result.Matches[0].Kind != "types" {
+		t.Fatalf("want 1 type match for T, got %+v", result.Matches)
+	}
+
+	// limit caps results
+	result, err = eng.SearchName(dir, "Foo", "", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 1 {
+		t.Fatalf("want 1 match with limit=1, got %d", result.Total)
+	}
+
+	// undefined name -> 0 matches, not null
+	result, err = eng.SearchName(dir, "Nope", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 0 || result.Matches == nil {
+		t.Fatalf("want 0 matches non-null, got %+v", result)
+	}
+}

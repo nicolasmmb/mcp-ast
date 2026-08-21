@@ -83,6 +83,10 @@ func Register(s *mcp.Server, eng *engine.Engine) {
 		Name:        "get_text_file",
 		Description: "Return the exact source text of a 0-based (row, col) range, e.g. the positions reported on every node, capture or symbol. Use to read full code without truncation.",
 	}, timed(t.getText))
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "search_name_dir",
+		Description: "Search for a symbol by name (class, function, variable, etc.) across source files in a directory, using the AST. Returns only declarations with their kind, file and position.",
+	}, timed(t.searchName))
 }
 
 type listLanguagesInput struct{}
@@ -289,4 +293,26 @@ func (t *tools) getText(ctx context.Context, req *mcp.CallToolRequest, in getTex
 		return nil, nil, err
 	}
 	return nil, &getTextOutput{Language: l.Name(), Path: in.Path, Text: text}, nil
+}
+
+type searchNameInput struct {
+	Name     string `json:"name" jsonschema:"name to search for (e.g. class name, function name, variable)"`
+	Path     string `json:"path" jsonschema:"directory to search recursively"`
+	Language string `json:"language,omitempty" jsonschema:"optional; language name (e.g. go, java). Omit to search all recognized files"`
+	Limit    int    `json:"limit,omitempty" jsonschema:"optional; maximum number of matches to return, 0 = unlimited"`
+}
+
+type searchNameOutput struct {
+	Timed
+	Total   int                  `json:"total"`
+	Matches []engine.SearchMatch `json:"matches"`
+	Errors  map[string]string    `json:"errors,omitempty"`
+}
+
+func (t *tools) searchName(ctx context.Context, req *mcp.CallToolRequest, in searchNameInput) (*mcp.CallToolResult, *searchNameOutput, error) {
+	result, err := t.engine.SearchName(in.Path, in.Name, in.Language, in.Limit)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, &searchNameOutput{Total: result.Total, Matches: result.Matches, Errors: result.Errors}, nil
 }

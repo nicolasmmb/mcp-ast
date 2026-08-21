@@ -14,6 +14,7 @@ Analisa arquivos e diretórios e expõe 7 tools por stdio:
 | `get_text_file` | Código exato de um range de posições de um arquivo |
 | `scan_symbols_dir` | Símbolos de um diretório inteiro |
 | `scan_variables_dir` | Variáveis de um diretório inteiro |
+| `search_name_dir` | Busca um nome em arquivos de um diretório |
 
 Toda tool devolve `elapsed_ms` (tempo de processamento da consulta em milissegundos) junto com o resultado.
 
@@ -491,6 +492,48 @@ Devolve o texto exato de um range de posições (0-based), como as que qualquer 
 
 ---
 
+## `search_name_dir`
+
+Busca um símbolo **por nome** em todos os arquivos de um diretório, usando o AST (as symbol queries do tree-sitter por linguagem). Retorna **apenas declarações** — classes, funções, variáveis, etc. — com o `kind`, posição e texto, ignorando usos, comentários e strings.
+
+**Argumentos:**
+
+| Campo | Tipo | Obrigatório | Descrição |
+|---|---|---|---|
+| `name` | string | sim | Nome do símbolo a buscar (igualdade exata) |
+| `path` | string | sim | Diretório para buscar recursivamente |
+| `language` | string | não | Filtrar por linguagem (ex. `go`, `java`). Omitir para buscar em todos os arquivos reconhecidos |
+| `limit` | int | não | Máximo de matches (0 = sem limite) |
+
+**Request:**
+
+```json
+{"name": "search_name_dir", "arguments": {"name": "Engine", "path": "."}}
+```
+
+**Response:**
+
+```json
+{
+  "elapsed_ms": 37.2,
+  "total": 1,
+  "matches": [
+    {
+      "file": "internal/engine/engine.go",
+      "kind": "types",
+      "name": "Engine",
+      "line": 48,
+      "col": 5,
+      "text": "Engine struct {"
+    }
+  ]
+}
+```
+
+Cada match tem `file` (caminho), `kind` (tipo de símbolo: `classes`, `functions`, `types`, `variables`...), `name`, `line`/`col` (posição 0-based) e `text` (resumo de 1 linha do símbolo). Por ser AST-aware, só acha **definições** — usar a busca para achar onde o nome aparece como referência não funciona; para isso use `query_ast_file` ou a busca textual.
+
+---
+
 # Notas de design
 
 - **`text` truncado por padrão**: para manter os outputs pequenos, `text` vem como a primeira linha do nó (até 200 chars). O corpo completo é obtido com `include_text: true` (`symbols_file`/`query_ast_file`) ou via `get_text_file`. Isso evita que listar símbolos de um arquivo grande exploda o contexto.
@@ -500,6 +543,6 @@ Devolve o texto exato de um range de posições (0-based), como as que qualquer 
 # Testes
 
 ```bash
-go test ./...   # parse + símbolos por linguagem; engine (scan, analyze, query, get_text, include_text)
+go test ./...   # parse + símbolos por linguagem; engine (scan, analyze, query, get_text, include_text, search)
 go vet ./...    # gofmt limpo
 ```
