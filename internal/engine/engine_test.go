@@ -326,6 +326,29 @@ func call() int { return Foo() + 1 }
 	}
 }
 
+func TestRenamePreviewNoMatch(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n\nfunc Foo() int { return 1 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg := lang.NewRegistry()
+	if err := reg.Register(golanglang.Go{}); err != nil {
+		t.Fatal(err)
+	}
+	eng := New(reg)
+
+	matches, _, err := eng.RenamePreview(context.Background(), dir, "NaoExiste", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matches == nil {
+		t.Fatal("matches must be a non-nil empty slice, not null")
+	}
+	if len(matches) != 0 {
+		t.Fatalf("want 0 matches, got %d", len(matches))
+	}
+}
+
 func TestCallGraph(t *testing.T) {
 	dir := t.TempDir()
 	src := `package a
