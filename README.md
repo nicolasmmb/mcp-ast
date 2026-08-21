@@ -15,6 +15,7 @@ Analisa arquivos e diretórios e expõe 7 tools por stdio:
 | `scan_symbols_dir` | Símbolos de um diretório inteiro |
 | `scan_variables_dir` | Variáveis de um diretório inteiro |
 | `search_name_dir` | Busca um nome em arquivos de um diretório |
+| `complexity_file` | Complexidade ciclomática por função |
 
 Toda tool devolve `elapsed_ms` (tempo de processamento da consulta em milissegundos) junto com o resultado.
 
@@ -534,6 +535,40 @@ Cada match tem `file` (caminho), `kind` (tipo de símbolo: `classes`, `functions
 
 ---
 
+## `complexity_file`
+
+Complexidade ciclomática (`1 + pontos de decisão`) de cada função e método de um arquivo. Pontos de decisão: `if`, loops (`for`/`while`/`do`), `switch`/`case`, ternário, `catch`, e operadores lógicos `&&`/`||` — cada um soma 1.
+
+**Argumentos:**
+
+| Campo | Tipo | Obrigatório | Descrição |
+|---|---|---|---|
+| `path` | string | sim | Arquivo a analisar |
+| `language` | string | não | Omitir para autodetect |
+
+**Request:**
+
+```json
+{"name": "complexity_file", "arguments": {"path": "internal/engine/engine.go"}}
+```
+
+**Response:**
+
+```json
+{
+  "elapsed_ms": 3.1,
+  "language": "go",
+  "entries": [
+    {"name": "hasExt", "kind": "functions", "complexity": 3, "start": {"row": 182, "col": 0}, "end": {"row": 189, "col": 1}},
+    {"name": "complexityOf", "kind": "functions", "complexity": 5, "start": {"row": 268, "col": 0}, "end": {"row": 291, "col": 1}}
+  ]
+}
+```
+
+Regra da complexidade ciclomática: cada `if`/`for`/`while`/`switch`/`case`/ternário/`catch` soma 1, e cada `&&`/`||` soma 1 (na mesma linha, `a && b` = 2 pontos). O `binary_expression` só conta quando o operador é lógico — aritmética não soma. `complexity > 10` é um bom candidato a refactor.
+
+---
+
 # Notas de design
 
 - **`text` truncado por padrão**: para manter os outputs pequenos, `text` vem como a primeira linha do nó (até 200 chars). O corpo completo é obtido com `include_text: true` (`symbols_file`/`query_ast_file`) ou via `get_text_file`. Isso evita que listar símbolos de um arquivo grande exploda o contexto.
@@ -543,6 +578,6 @@ Cada match tem `file` (caminho), `kind` (tipo de símbolo: `classes`, `functions
 # Testes
 
 ```bash
-go test ./...   # parse + símbolos por linguagem; engine (scan, analyze, query, get_text, include_text, search)
+go test ./...   # parse + símbolos por linguagem; engine (scan, analyze, query, get_text, include_text, search, complexity)
 go vet ./...    # gofmt limpo
 ```

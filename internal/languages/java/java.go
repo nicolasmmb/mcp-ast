@@ -31,4 +31,20 @@ func (Java) SymbolQueries() map[string]string {
 	}
 }
 
+func (Java) DecisionKinds() []string {
+	return []string{
+		"if_statement",
+		"for_statement",
+		"enhanced_for_statement",
+		"while_statement",
+		"do_statement",
+		"switch_expression",
+		"switch_block_statement_group",
+		"switch_rule",
+		"ternary_expression",
+		"catch_clause",
+		"binary_expression", // only counts when the operator is && or ||
+	}
+}
+
 var _ lang.Language = Java{}

@@ -216,6 +216,111 @@ type KindMetric struct {
 	MaxLines int     `json:"max_lines"`
 }
 
+// ComplexityEntry is one function/method's cyclomatic complexity.
+type ComplexityEntry struct {
+	Name       string `json:"name"`
+	Kind       string `json:"kind"`
+	Complexity int    `json:"complexity"`
+	Start      Point  `json:"start"`
+	End        Point  `json:"end"`
+}
+
+// Complexity computes cyclomatic complexity (1 + decision points) for every
+// function and method in the file, using the language's decision node kinds.
+func (e *Engine) Complexity(l lang.Language, path string) ([]ComplexityEntry, error) {
+	src, tree, err := e.parseFile(l, path)
+	if err != nil {
+		return nil, err
+	}
+	defer tree.Close()
+	root := tree.RootNode()
+	decisions := make(map[string]bool, len(l.DecisionKinds()))
+	for _, k := range l.DecisionKinds() {
+		decisions[k] = true
+	}
+	// function-like symbol queries: name comes from the @name capture,
+	// the body range from the @symbol capture.
+	funcKinds := []string{"functions", "methods", "constructors"}
+	out := []ComplexityEntry{}
+	for _, kind := range funcKinds {
+		qs, ok := l.SymbolQueries()[kind]
+		if !ok {
+			continue
+		}
+		q, qerr := ts.NewQuery(l.Language(), qs)
+		if qerr != nil {
+			return nil, fmt.Errorf("invalid query for %q: %s", kind, qerr.Message)
+		}
+		c := ts.NewQueryCursor()
+		names := q.CaptureNames()
+		it := c.Matches(q, root, src)
+		for m := it.Next(); m != nil; m = it.Next() {
+			var name string
+			var symNode *ts.Node
+			for _, cap := range m.Captures {
+				switch names[cap.Index] {
+				case "name":
+					name = cap.Node.Utf8Text(src)
+				case "symbol":
+					symNode = &cap.Node
+				}
+			}
+			if symNode == nil {
+				continue
+			}
+			out = append(out, ComplexityEntry{
+				Name:       name,
+				Kind:       kind,
+				Complexity: complexityOf(symNode, src, decisions),
+				Start:      point(symNode.StartPosition()),
+				End:        point(symNode.EndPosition()),
+			})
+		}
+		c.Close()
+		q.Close()
+	}
+	return out, nil
+}
+
+// complexityOf counts decision nodes in n's subtree: every node whose kind is
+// in decisions adds 1, except binary_expression which only counts when its
+// operator is && or ||. Base complexity is 1.
+func complexityOf(n *ts.Node, src []byte, decisions map[string]bool) int {
+	complexity := 1
+	var walk func(*ts.Node)
+	walk = func(nn *ts.Node) {
+		kind := nn.Kind()
+		if decisions[kind] {
+			if kind == "binary_expression" {
+				if hasLogicalOp(nn, src) {
+					complexity++
+				}
+			} else {
+				complexity++
+			}
+		}
+		for i := uint(0); i < nn.ChildCount(); i++ {
+			walk(nn.Child(i))
+		}
+	}
+	walk(n)
+	return complexity
+}
+
+// hasLogicalOp reports whether a binary_expression's operator is && or ||.
+func hasLogicalOp(n *ts.Node, src []byte) bool {
+	for i := uint(0); i < n.ChildCount(); i++ {
+		ch := n.Child(i)
+		if ch.ChildCount() == 0 {
+			op := ch.Utf8Text(src)
+			if op == "&&" || op == "||" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Metrics is the per-file analysis report.
 type Metrics struct {
 	Lines      int                   `json:"lines"`
@@ -315,8 +420,8 @@ func byteOffset(src []byte, row, col int) int {
 }
 
 type SearchResult struct {
-	Total   int             `json:"total"`
-	Matches []SearchMatch   `json:"matches"`
+	Total   int               `json:"total"`
+	Matches []SearchMatch     `json:"matches"`
 	Errors  map[string]string `json:"errors,omitempty"`
 }
 

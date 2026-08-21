@@ -191,6 +191,59 @@ func (t T) Bar() {}
 	}
 }
 
+func TestComplexity(t *testing.T) {
+	dir := t.TempDir()
+	src := `package a
+
+func Simple() int { return 1 }
+
+func Branches(x int) int {
+	if x > 0 && x < 10 {
+		return 1
+	}
+	if x > 100 || x < -100 {
+		return 2
+	}
+	for i := 0; i < x; i++ {
+		select {}
+	}
+	switch x {
+	case 1:
+		return 3
+	default:
+		return 4
+	}
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg := lang.NewRegistry()
+	if err := reg.Register(golanglang.Go{}); err != nil {
+		t.Fatal(err)
+	}
+	eng := New(reg)
+
+	entries, err := eng.Complexity(golanglang.Go{}, filepath.Join(dir, "a.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("want 2 functions, got %d: %+v", len(entries), entries)
+	}
+	byName := map[string]int{}
+	for _, en := range entries {
+		byName[en.Name] = en.Complexity
+	}
+	if byName["Simple"] != 1 {
+		t.Fatalf("Simple complexity = %d, want 1", byName["Simple"])
+	}
+	// Branches: 2 if + 1 logical && + 1 logical || + 1 for + 1 select + 1 switch + 1 case + 1 default + base 1 = 10
+	if byName["Branches"] != 10 {
+		t.Fatalf("Branches complexity = %d, want 10", byName["Branches"])
+	}
+}
+
 func TestScanCancelled(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\nfunc Foo() int { return 1 }\n"), 0o644); err != nil {

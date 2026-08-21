@@ -87,6 +87,10 @@ func Register(s *mcp.Server, eng *engine.Engine) {
 		Name:        "search_name_dir",
 		Description: "Search for a symbol by name (class, function, variable, etc.) across source files in a directory, using the AST. Returns only declarations with their kind, file and position.",
 	}, timed(t.searchName))
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "complexity_file",
+		Description: "Compute cyclomatic complexity (1 + decision points) for every function and method in a source file. Branches, loops, switch cases, ternaries and logical operators add to the score.",
+	}, timed(t.complexity))
 }
 
 type listLanguagesInput struct{}
@@ -315,4 +319,27 @@ func (t *tools) searchName(ctx context.Context, req *mcp.CallToolRequest, in sea
 		return nil, nil, err
 	}
 	return nil, &searchNameOutput{Total: result.Total, Matches: result.Matches, Errors: result.Errors}, nil
+}
+
+type complexityInput struct {
+	Language string `json:"language,omitempty" jsonschema:"optional; language name, e.g. java. Omit to auto-detect from the file extension"`
+	Path     string `json:"path" jsonschema:"path to the source file to analyze"`
+}
+
+type complexityOutput struct {
+	Timed
+	Language string                   `json:"language"`
+	Entries  []engine.ComplexityEntry `json:"entries"`
+}
+
+func (t *tools) complexity(ctx context.Context, req *mcp.CallToolRequest, in complexityInput) (*mcp.CallToolResult, *complexityOutput, error) {
+	l, err := t.engine.Resolve(in.Language, in.Path)
+	if err != nil {
+		return nil, nil, err
+	}
+	entries, err := t.engine.Complexity(l, in.Path)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, &complexityOutput{Language: l.Name(), Entries: entries}, nil
 }

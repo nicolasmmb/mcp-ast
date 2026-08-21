@@ -26,4 +26,16 @@ func (Python) SymbolQueries() map[string]string {
 	}
 }
 
+func (Python) DecisionKinds() []string {
+	return []string{
+		"if_statement",
+		"for_statement",
+		"while_statement",
+		"conditional_expression",
+		"boolean_operator", // and / or
+		"except_clause",
+		"case_clause",
+	}
+}
+
 var _ lang.Language = Python{}

@@ -18,6 +18,9 @@ type Language interface {
 	Extensions() []string
 	Language() *ts.Language
 	SymbolQueries() map[string]string
+	// DecisionKinds lists the AST node kinds that add one to cyclomatic
+	// complexity (branches, loops, switch cases, ternaries, catch, ...).
+	DecisionKinds() []string
 }
 
 type entry struct {

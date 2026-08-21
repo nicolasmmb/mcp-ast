@@ -27,4 +27,19 @@ func (Go) SymbolQueries() map[string]string {
 	}
 }
 
+func (Go) DecisionKinds() []string {
+	return []string{
+		"if_statement",
+		"for_statement",
+		"expression_switch_statement",
+		"type_switch_statement",
+		"select_statement",
+		"expression_case",
+		"type_case",
+		"communication_case",
+		"default_case",
+		"binary_expression", // only counts when the operator is && or ||
+	}
+}
+
 var _ lang.Language = Go{}
