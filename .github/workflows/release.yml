@@ -2,13 +2,56 @@ name: release
 
 on:
   push:
-    tags: ['v*']
+    branches: [main]
 
 permissions:
   contents: write
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
+  tag:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.compute.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute and push next version tag
+        id: compute
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+          LAST=$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)
+          MAJOR=${LAST#v}; MAJOR=${MAJOR%%.*}
+          REST=${LAST#*.}; MINOR=${REST%%.*}
+          PATCH=${LAST##*.}
+          if git rev-parse -q --verify "refs/tags/$LAST" >/dev/null 2>&1; then
+            if git log "$LAST..HEAD" --format=%s | grep -qE '^(feat|feat\(|feat!|refactor!|BREAKING)'; then
+              MINOR=$((MINOR + 1)); PATCH=0
+            else
+              PATCH=$((PATCH + 1))
+            fi
+          else
+            MINOR=$((MINOR + 1)); PATCH=0
+          fi
+          NEXT="v$MAJOR.$MINOR.$PATCH"
+          if git rev-parse -q --verify "refs/tags/$NEXT" >/dev/null 2>&1; then
+            echo "tag $NEXT already exists, skipping push"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$NEXT" -m "release $NEXT"
+            git push origin "$NEXT"
+          fi
+          echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: tag
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -29,6 +72,8 @@ jobs:
           - goos: windows
             goarch: amd64
             runner: windows-latest
+    env:
+      VERSION: ${{ needs.tag.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -50,7 +95,7 @@ jobs:
           ext=""
           [ "$GOOS" = "windows" ] && ext=".exe"
           out="ast-mcp-${GOOS}-${GOARCH}${ext}"
-          go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o "$out" ./cmd/ast-mcp
+          go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o "$out" ./cmd/ast-mcp
           if [ "$RUNNER_OS" = "Windows" ]; then
             powershell -Command "(Get-FileHash -Algorithm SHA256 '$out').Hash.ToLower() + '  ' + '$out'" > "$out.sha256"
           else
@@ -72,4 +117,5 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.tag.outputs.version }}
           files: dist/**/ast-mcp-*
