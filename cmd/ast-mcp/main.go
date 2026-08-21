@@ -16,6 +16,9 @@ import (
 	"mcp-ast/internal/tools"
 )
 
+// version is injected at build time with -ldflags "-X main.version=vX.Y.Z".
+var version = "dev"
+
 func main() {
 	timeout := flag.Duration("tool-timeout", 30*time.Second, "per-tool-call timeout (0 disables)")
 	flag.Parse()
@@ -28,7 +31,7 @@ func main() {
 		}
 	}
 
-	server := mcp.NewServer(&mcp.Implementation{Name: "ast-mcp", Version: "0.1.0"}, nil)
+	server := mcp.NewServer(&mcp.Implementation{Name: "ast-mcp", Version: version}, nil)
 	tools.Register(server, engine.New(reg))
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {

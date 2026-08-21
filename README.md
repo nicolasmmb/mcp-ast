@@ -117,6 +117,11 @@ O wrapper `timed()` (`internal/tools/timing.go`) envolve todos os handlers, mede
 go build -o ast-mcp ./cmd/ast-mcp
 ```
 
+Ou baixe o binário pronto de uma [release](https://github.com/nicolasmmb/mcp-ast/releases):
+`ast-mcp-linux-amd64`, `ast-mcp-linux-arm64`, `ast-mcp-darwin-amd64`, `ast-mcp-darwin-arm64`, `ast-mcp-windows-amd64.exe`.
+
+Releases são geradas automaticamente: a cada push em `main` um workflow calcula a próxima versão (`feat:` → minor, senão patch), cria a tag `vX.Y.Z` e publica os binários (com checksum `.sha256`).
+
 Servidor stdio — funciona com qualquer cliente MCP. Exemplo de config opencode (`opencode.json`):
 
 ```json
