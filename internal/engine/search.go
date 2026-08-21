@@ -26,15 +26,7 @@ type SearchMatch struct {
 // SearchName walks dir and returns every symbol whose name equals name,
 // using the language's built-in tree-sitter symbol queries (declarations
 // only: classes, functions, variables, ...). limit caps matches (0 = all).
-func (e *Engine) SearchName(ctx context.Context, dir, name, langName string, limit int) (*SearchResult, error) {
-	var filter lang.Language
-	if langName != "" {
-		var err error
-		filter, err = e.reg.Resolve(langName, dir)
-		if err != nil {
-			return nil, err
-		}
-	}
+func (e *Engine) SearchName(ctx context.Context, dir, name string, filter lang.Language, limit int) (*SearchResult, error) {
 	files, errs, err := e.ScanSymbols(ctx, dir, filter)
 	if err != nil {
 		return nil, err

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 
 	ts "github.com/tree-sitter/go-tree-sitter"
 
@@ -20,73 +21,31 @@ type RenameMatch struct {
 // RenamePreview finds every occurrence of name across the directory's
 // recognized files (via the language's identifier query) and flags which
 // occurrences are declarations. Useful to preview a rename before editing.
-func (e *Engine) RenamePreview(ctx context.Context, dir, name, langName string, limit int) ([]RenameMatch, map[string]string, error) {
-	var filter lang.Language
-	if langName != "" {
-		var err error
-		filter, err = e.reg.Resolve(langName, dir)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-	files, errs, err := e.ScanSymbols(ctx, dir, filter)
-	if err != nil {
-		return nil, nil, err
-	}
+func (e *Engine) RenamePreview(ctx context.Context, dir, name string, filter lang.Language, limit int) ([]RenameMatch, map[string]string, error) {
 	matches := []RenameMatch{}
-	for path := range files {
-		var l lang.Language
-		if filter != nil {
-			l = filter
-		} else {
-			ll, err := e.reg.Resolve("", path)
-			if err != nil {
-				continue
-			}
-			l = ll
-		}
+	errs, err := e.walkFiles(ctx, dir, filter, func(path string, l lang.Language) error {
 		qs, ok := l.AuxQueries()["identifiers"]
 		if !ok {
-			continue
+			return nil
 		}
 		src, tree, err := e.parseFile(l, path)
 		if err != nil {
-			errs[path] = err.Error()
-			continue
+			return err
 		}
+		defer tree.Close()
 		root := tree.RootNode()
-		// collect definition positions from the symbol queries' @name captures
-		defPos := make(map[Point]bool)
-		for _, sq := range l.SymbolQueries() {
-			q, qerr := ts.NewQuery(l.Language(), sq)
-			if qerr != nil {
-				continue
-			}
-			names := q.CaptureNames()
-			cc := ts.NewQueryCursor()
-			it := cc.Matches(q, root, src)
-			for m := it.Next(); m != nil; m = it.Next() {
-				for _, cap := range m.Captures {
-					if names[cap.Index] == "name" && cap.Node.Utf8Text(src) == name {
-						defPos[point(cap.Node.StartPosition())] = true
-					}
-				}
-			}
-			cc.Close()
-			q.Close()
-		}
+		defPos := definitionPositions(l, root, src, name)
 		q, qerr := ts.NewQuery(l.Language(), qs)
 		if qerr != nil {
-			tree.Close()
-			errs[path] = qerr.Message
-			continue
+			return fmt.Errorf("invalid identifier query: %s", qerr.Message)
 		}
+		defer q.Close()
 		c := ts.NewQueryCursor()
+		defer c.Close()
 		it := c.Matches(q, root, src)
 		for m := it.Next(); m != nil; m = it.Next() {
 			for _, cap := range m.Captures {
-				text := cap.Node.Utf8Text(src)
-				if text != name {
+				if cap.Node.Utf8Text(src) != name {
 					continue
 				}
 				start := point(cap.Node.StartPosition())
@@ -98,19 +57,39 @@ func (e *Engine) RenamePreview(ctx context.Context, dir, name, langName string, 
 					Definition: defPos[start],
 				})
 				if limit > 0 && len(matches) >= limit {
-					break
+					return nil
 				}
 			}
-			if limit > 0 && len(matches) >= limit {
-				break
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return matches, errs, nil
+}
+
+// definitionPositions collects the start positions of every declaration of
+// name in the file, from the @name captures of the symbol queries.
+func definitionPositions(l lang.Language, root *ts.Node, src []byte, name string) map[Point]bool {
+	defPos := make(map[Point]bool)
+	for _, sq := range l.SymbolQueries() {
+		q, qerr := ts.NewQuery(l.Language(), sq)
+		if qerr != nil {
+			continue
+		}
+		names := q.CaptureNames()
+		c := ts.NewQueryCursor()
+		it := c.Matches(q, root, src)
+		for m := it.Next(); m != nil; m = it.Next() {
+			for _, cap := range m.Captures {
+				if names[cap.Index] == "name" && cap.Node.Utf8Text(src) == name {
+					defPos[point(cap.Node.StartPosition())] = true
+				}
 			}
 		}
 		c.Close()
 		q.Close()
-		tree.Close()
-		if limit > 0 && len(matches) >= limit {
-			return matches, errs, nil
-		}
 	}
-	return matches, errs, nil
+	return defPos
 }

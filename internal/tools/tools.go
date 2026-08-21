@@ -327,7 +327,11 @@ type searchNameOutput struct {
 }
 
 func (t *tools) searchName(ctx context.Context, req *mcp.CallToolRequest, in searchNameInput) (*mcp.CallToolResult, *searchNameOutput, error) {
-	result, err := t.engine.SearchName(ctx, in.Path, in.Name, in.Language, in.Limit)
+	filter, _, err := t.langFilter(in.Language, in.Path)
+	if err != nil {
+		return nil, nil, err
+	}
+	result, err := t.engine.SearchName(ctx, in.Path, in.Name, filter, in.Limit)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -397,11 +401,11 @@ type renamePreviewOutput struct {
 }
 
 func (t *tools) renamePreview(ctx context.Context, req *mcp.CallToolRequest, in renamePreviewInput) (*mcp.CallToolResult, *renamePreviewOutput, error) {
-	_, langName, err := t.langFilter(in.Language, in.Path)
+	filter, langName, err := t.langFilter(in.Language, in.Path)
 	if err != nil {
 		return nil, nil, err
 	}
-	matches, errs, err := t.engine.RenamePreview(ctx, in.Path, in.Name, in.Language, in.Limit)
+	matches, errs, err := t.engine.RenamePreview(ctx, in.Path, in.Name, filter, in.Limit)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -446,11 +450,11 @@ type callersOutput struct {
 }
 
 func (t *tools) callers(ctx context.Context, req *mcp.CallToolRequest, in callersInput) (*mcp.CallToolResult, *callersOutput, error) {
-	_, langName, err := t.langFilter(in.Language, in.Path)
+	filter, langName, err := t.langFilter(in.Language, in.Path)
 	if err != nil {
 		return nil, nil, err
 	}
-	callers, errs, err := t.engine.Callers(ctx, in.Path, in.Name, in.Language, in.Limit)
+	callers, errs, err := t.engine.Callers(ctx, in.Path, in.Name, filter, in.Limit)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -151,7 +151,7 @@ func (t T) Bar() {}
 	eng := New(reg)
 
 	// find declarations of Foo
-	result, err := eng.SearchName(context.Background(), dir, "Foo", "", 0)
+	result, err := eng.SearchName(context.Background(), dir, "Foo", nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func (t T) Bar() {}
 	}
 
 	// a name that only appears as a type declaration
-	result, err = eng.SearchName(context.Background(), dir, "T", "go", 0)
+	result, err = eng.SearchName(context.Background(), dir, "T", golanglang.Go{}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func (t T) Bar() {}
 	}
 
 	// limit caps results
-	result, err = eng.SearchName(context.Background(), dir, "Foo", "", 1)
+	result, err = eng.SearchName(context.Background(), dir, "Foo", nil, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func (t T) Bar() {}
 	}
 
 	// undefined name -> 0 matches, not null
-	result, err = eng.SearchName(context.Background(), dir, "Nope", "", 0)
+	result, err = eng.SearchName(context.Background(), dir, "Nope", nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +306,7 @@ func call() int { return Foo() + 1 }
 	}
 	eng := New(reg)
 
-	matches, _, err := eng.RenamePreview(context.Background(), dir, "Foo", "", 0)
+	matches, _, err := eng.RenamePreview(context.Background(), dir, "Foo", nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +337,7 @@ func TestRenamePreviewNoMatch(t *testing.T) {
 	}
 	eng := New(reg)
 
-	matches, _, err := eng.RenamePreview(context.Background(), dir, "NaoExiste", "", 0)
+	matches, _, err := eng.RenamePreview(context.Background(), dir, "NaoExiste", nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,7 +425,7 @@ func gamma() int { return 0 }
 	}
 	eng := New(reg)
 
-	callers, _, err := eng.Callers(context.Background(), dir, "helper", "", 0)
+	callers, _, err := eng.Callers(context.Background(), dir, "helper", nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -444,7 +444,7 @@ func gamma() int { return 0 }
 	}
 
 	// no callers -> empty non-nil slice
-	callers, _, err = eng.Callers(context.Background(), dir, "gamma", "", 0)
+	callers, _, err = eng.Callers(context.Background(), dir, "gamma", nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

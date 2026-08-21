@@ -130,15 +130,7 @@ type Caller struct {
 
 // Callers walks dir and finds every function/method that calls target,
 // aggregating call sites per caller function. Uses the language's call query.
-func (e *Engine) Callers(ctx context.Context, dir, target, langName string, limit int) ([]Caller, map[string]string, error) {
-	var filter lang.Language
-	if langName != "" {
-		var err error
-		filter, err = e.reg.Resolve(langName, dir)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
+func (e *Engine) Callers(ctx context.Context, dir, target string, filter lang.Language, limit int) ([]Caller, map[string]string, error) {
 	callers := make(map[string]*Caller)
 	var order []string
 	errs, err := e.walkFiles(ctx, dir, filter, func(path string, l lang.Language) error {
