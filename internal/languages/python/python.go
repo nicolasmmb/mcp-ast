@@ -38,4 +38,11 @@ func (Python) DecisionKinds() []string {
 	}
 }
 
+func (Python) AuxQueries() map[string]string {
+	return map[string]string{
+		"identifiers": `[(identifier) (attribute)] @id`,
+		"calls":       `(call function: [(identifier) (attribute)] @callee)`,
+	}
+}
+
 var _ lang.Language = Python{}

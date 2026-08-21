@@ -42,4 +42,11 @@ func (Go) DecisionKinds() []string {
 	}
 }
 
+func (Go) AuxQueries() map[string]string {
+	return map[string]string{
+		"identifiers": `[(identifier) (type_identifier) (field_identifier)] @id`,
+		"calls":       `(call_expression function: [(identifier) (field_identifier)] @callee)`,
+	}
+}
+
 var _ lang.Language = Go{}

@@ -95,6 +95,10 @@ func Register(s *mcp.Server, eng *engine.Engine) {
 		Name:        "unused_symbols_dir",
 		Description: "Find symbols declared but never referenced across a directory. Heuristic: a symbol whose name appears exactly once in all recognized files is unused.",
 	}, timed(t.unusedSymbols))
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "rename_preview_dir",
+		Description: "Find every occurrence of a symbol name across a directory's recognized files, flagging which are definitions. Use to preview all touchpoints before renaming.",
+	}, timed(t.renamePreview))
 }
 
 type listLanguagesInput struct{}
@@ -379,4 +383,32 @@ func (t *tools) unusedSymbols(ctx context.Context, req *mcp.CallToolRequest, in 
 		langName = filter.Name()
 	}
 	return nil, &unusedSymbolsOutput{Language: langName, Symbols: result.Matches, Errors: result.Errors}, nil
+}
+
+type renamePreviewInput struct {
+	Name     string `json:"name" jsonschema:"symbol name to preview renaming"`
+	Path     string `json:"path" jsonschema:"directory to scan recursively"`
+	Language string `json:"language,omitempty" jsonschema:"optional; language name (e.g. go). Omit to auto-detect each file by extension"`
+	Limit    int    `json:"limit,omitempty" jsonschema:"optional; maximum number of matches, 0 = unlimited"`
+}
+
+type renamePreviewOutput struct {
+	Timed
+	Language string               `json:"language"`
+	Matches  []engine.RenameMatch `json:"matches"`
+	Errors   map[string]string    `json:"errors,omitempty"`
+}
+
+func (t *tools) renamePreview(ctx context.Context, req *mcp.CallToolRequest, in renamePreviewInput) (*mcp.CallToolResult, *renamePreviewOutput, error) {
+	matches, errs, err := t.engine.RenamePreview(ctx, in.Path, in.Name, in.Language, in.Limit)
+	if err != nil {
+		return nil, nil, err
+	}
+	langName := "auto"
+	if in.Language != "" {
+		if l, lerr := t.engine.Resolve(in.Language, in.Path); lerr == nil {
+			langName = l.Name()
+		}
+	}
+	return nil, &renamePreviewOutput{Language: langName, Matches: matches, Errors: errs}, nil
 }

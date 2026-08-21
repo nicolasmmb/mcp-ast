@@ -21,6 +21,10 @@ type Language interface {
 	// DecisionKinds lists the AST node kinds that add one to cyclomatic
 	// complexity (branches, loops, switch cases, ternaries, catch, ...).
 	DecisionKinds() []string
+	// AuxQueries returns auxiliary queries for advanced tools. Keys:
+	//   - "identifiers": captures every identifier-like node as @id
+	//   - "calls": captures every call site's callee as @callee
+	AuxQueries() map[string]string
 }
 
 type entry struct {

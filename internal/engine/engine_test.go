@@ -285,6 +285,47 @@ func caller() int { return a.Used() }
 	}
 }
 
+func TestRenamePreview(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"a.go": `package a
+
+func Foo() int { return 1 }
+
+func call() int { return Foo() + 1 }
+`,
+	}
+	for name, src := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reg := lang.NewRegistry()
+	if err := reg.Register(golanglang.Go{}); err != nil {
+		t.Fatal(err)
+	}
+	eng := New(reg)
+
+	matches, _, err := eng.RenamePreview(context.Background(), dir, "Foo", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 2 {
+		t.Fatalf("want 2 matches for Foo (def + use), got %d: %+v", len(matches), matches)
+	}
+	defs, uses := 0, 0
+	for _, m := range matches {
+		if m.Definition {
+			defs++
+		} else {
+			uses++
+		}
+	}
+	if defs != 1 || uses != 1 {
+		t.Fatalf("want 1 definition + 1 use, got %d defs %d uses", defs, uses)
+	}
+}
+
 func TestScanCancelled(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\nfunc Foo() int { return 1 }\n"), 0o644); err != nil {

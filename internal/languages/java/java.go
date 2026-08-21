@@ -47,4 +47,11 @@ func (Java) DecisionKinds() []string {
 	}
 }
 
+func (Java) AuxQueries() map[string]string {
+	return map[string]string{
+		"identifiers": `[(identifier) (type_identifier) (scoped_identifier)] @id`,
+		"calls":       `(method_invocation name: (identifier) @callee)`,
+	}
+}
+
 var _ lang.Language = Java{}

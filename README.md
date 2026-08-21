@@ -17,6 +17,7 @@ Analisa arquivos e diretórios e expõe 7 tools por stdio:
 | `search_name_dir` | Busca um nome em arquivos de um diretório |
 | `complexity_file` | Complexidade ciclomática por função |
 | `unused_symbols_dir` | Símbolos declarados mas nunca referenciados |
+| `rename_preview_dir` | Ocorrências de um nome (renomeação) |
 
 Toda tool devolve `elapsed_ms` (tempo de processamento da consulta em milissegundos) junto com o resultado.
 
@@ -604,6 +605,42 @@ Símbolos **declarados mas nunca referenciados** (dead code) em um diretório. H
 
 ---
 
+## `rename_preview_dir`
+
+Acha **todas as ocorrências** de um nome de símbolo em um diretório (via query de identificadores da linguagem), marcando quais são **definições**. Use antes de renomear para ver todos os pontos a editar.
+
+**Argumentos:**
+
+| Campo | Tipo | Obrigatório | Descrição |
+|---|---|---|---|
+| `name` | string | sim | Nome do símbolo a renomear |
+| `path` | string | sim | Diretório para buscar recursivamente |
+| `language` | string | não | Filtrar por linguagem. Omitir para auto |
+| `limit` | int | não | Máximo de matches (0 = sem limite) |
+
+**Request:**
+
+```json
+{"name": "rename_preview_dir", "arguments": {"name": "Analyze", "path": "internal/engine"}}
+```
+
+**Response:**
+
+```json
+{
+  "elapsed_ms": 2.1,
+  "language": "auto",
+  "matches": [
+    {"file": "internal/engine/engine.go", "line": 335, "col": 13, "text": "func (e *Engine) Analyze(l lang.Language, ...)", "definition": true},
+    {"file": "internal/engine/engine_test.go", "line": 50, "col": 3, "text": "eng.Analyze(...)", "definition": false}
+  ]
+}
+```
+
+`definition: true` marca o ponto de declaração (cruzado com as symbol queries da linguagem); os demais são usos. `text` é a linha do pai do identificador (contexto do match). Renomear envolve editar todos os matches com `definition` e todos os usos que você quiser afetar.
+
+---
+
 # Notas de design
 
 - **`text` truncado por padrão**: para manter os outputs pequenos, `text` vem como a primeira linha do nó (até 200 chars). O corpo completo é obtido com `include_text: true` (`symbols_file`/`query_ast_file`) ou via `get_text_file`. Isso evita que listar símbolos de um arquivo grande exploda o contexto.
@@ -613,6 +650,6 @@ Símbolos **declarados mas nunca referenciados** (dead code) em um diretório. H
 # Testes
 
 ```bash
-go test ./...   # parse + símbolos por linguagem; engine (scan, analyze, query, get_text, include_text, search, complexity, unused)
+go test ./...   # parse + símbolos por linguagem; engine (scan, analyze, query, get_text, include_text, search, complexity, unused, rename)
 go vet ./...    # gofmt limpo
 ```
