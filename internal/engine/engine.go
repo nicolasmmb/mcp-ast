@@ -539,6 +539,135 @@ func (e *Engine) RenamePreview(ctx context.Context, dir, name, langName string, 
 	return matches, errs, nil
 }
 
+// CallEntry is a function/method with the callees it invokes.
+type CallEntry struct {
+	Name    string   `json:"name"`
+	Kind    string   `json:"kind"`
+	Callees []Callee `json:"callees"`
+	Start   Point    `json:"start"`
+	End     Point    `json:"end"`
+}
+
+// Callee is one called function/method name and how many times it is invoked.
+type Callee struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
+
+// CallGraph maps each function/method in the file to the callees it invokes,
+// using the language's call query. A call belongs to the function whose range
+// contains it. Calls outside any function are reported under "".
+func (e *Engine) CallGraph(l lang.Language, path string) ([]CallEntry, error) {
+	qs, ok := l.AuxQueries()["calls"]
+	if !ok {
+		return nil, fmt.Errorf("language %s has no call query", l.Name())
+	}
+	src, tree, err := e.parseFile(l, path)
+	if err != nil {
+		return nil, err
+	}
+	defer tree.Close()
+	root := tree.RootNode()
+
+	// function/method ranges
+	var funcs []CallEntry
+	for _, kind := range []string{"functions", "methods", "constructors"} {
+		sqs, ok := l.SymbolQueries()[kind]
+		if !ok {
+			continue
+		}
+		q, qerr := ts.NewQuery(l.Language(), sqs)
+		if qerr != nil {
+			return nil, fmt.Errorf("invalid query for %q: %s", kind, qerr.Message)
+		}
+		names := q.CaptureNames()
+		c := ts.NewQueryCursor()
+		it := c.Matches(q, root, src)
+		for m := it.Next(); m != nil; m = it.Next() {
+			var name string
+			var symNode *ts.Node
+			for _, cap := range m.Captures {
+				switch names[cap.Index] {
+				case "name":
+					name = cap.Node.Utf8Text(src)
+				case "symbol":
+					symNode = &cap.Node
+				}
+			}
+			if symNode == nil {
+				continue
+			}
+			funcs = append(funcs, CallEntry{
+				Name:    name,
+				Kind:    kind,
+				Callees: []Callee{},
+				Start:   point(symNode.StartPosition()),
+				End:     point(symNode.EndPosition()),
+			})
+		}
+		c.Close()
+		q.Close()
+	}
+	if len(funcs) == 0 {
+		return []CallEntry{}, nil
+	}
+
+	// collect calls and bucket them into the containing function
+	q, qerr := ts.NewQuery(l.Language(), qs)
+	if qerr != nil {
+		return nil, fmt.Errorf("invalid call query: %s", qerr.Message)
+	}
+	defer q.Close()
+	names := q.CaptureNames()
+	c := ts.NewQueryCursor()
+	defer c.Close()
+	it := c.Matches(q, root, src)
+	for m := it.Next(); m != nil; m = it.Next() {
+		var callee string
+		for _, cap := range m.Captures {
+			if names[cap.Index] == "callee" {
+				callee = cap.Node.Utf8Text(src)
+			}
+		}
+		if callee == "" {
+			continue
+		}
+		pos := point(m.Captures[0].Node.StartPosition())
+		idx := findFunc(funcs, pos)
+		if idx < 0 {
+			continue
+		}
+		funcs[idx].Callees = appendCallee(funcs[idx].Callees, callee)
+	}
+	return funcs, nil
+}
+
+// findFunc returns the index of the innermost function whose range contains pos.
+func findFunc(funcs []CallEntry, pos Point) int {
+	best, bestIdx := -1, -1
+	for i, f := range funcs {
+		if inRange(f.Start, f.End, pos) && f.Start.Row > best {
+			best, bestIdx = f.Start.Row, i
+		}
+	}
+	return bestIdx
+}
+
+func inRange(start, end, pos Point) bool {
+	return (pos.Row > start.Row || (pos.Row == start.Row && pos.Col >= start.Col)) &&
+		(pos.Row < end.Row || (pos.Row == end.Row && pos.Col < end.Col))
+}
+
+func appendCallee(callees []Callee, name string) []Callee {
+	for i := range callees {
+		if callees[i].Name == name {
+			callees[i].Count++
+			return callees
+		}
+	}
+	return append(callees, Callee{Name: name, Count: 1})
+}
+
 // GetText returns the exact source slice of a 0-based (row, col) range,
 // e.g. the positions reported on every Node/Capture/Symbol.
 func (e *Engine) GetText(l lang.Language, path string, start, end Point) (string, error) {

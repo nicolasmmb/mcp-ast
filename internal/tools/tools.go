@@ -99,6 +99,10 @@ func Register(s *mcp.Server, eng *engine.Engine) {
 		Name:        "rename_preview_dir",
 		Description: "Find every occurrence of a symbol name across a directory's recognized files, flagging which are definitions. Use to preview all touchpoints before renaming.",
 	}, timed(t.renamePreview))
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "call_graph_file",
+		Description: "Map each function and method in a source file to the callees it invokes, with call counts.",
+	}, timed(t.callGraph))
 }
 
 type listLanguagesInput struct{}
@@ -411,4 +415,27 @@ func (t *tools) renamePreview(ctx context.Context, req *mcp.CallToolRequest, in 
 		}
 	}
 	return nil, &renamePreviewOutput{Language: langName, Matches: matches, Errors: errs}, nil
+}
+
+type callGraphInput struct {
+	Language string `json:"language,omitempty" jsonschema:"optional; language name, e.g. java. Omit to auto-detect from the file extension"`
+	Path     string `json:"path" jsonschema:"path to the source file to analyze"`
+}
+
+type callGraphOutput struct {
+	Timed
+	Language  string             `json:"language"`
+	Functions []engine.CallEntry `json:"functions"`
+}
+
+func (t *tools) callGraph(ctx context.Context, req *mcp.CallToolRequest, in callGraphInput) (*mcp.CallToolResult, *callGraphOutput, error) {
+	l, err := t.engine.Resolve(in.Language, in.Path)
+	if err != nil {
+		return nil, nil, err
+	}
+	functions, err := t.engine.CallGraph(l, in.Path)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, &callGraphOutput{Language: l.Name(), Functions: functions}, nil
 }

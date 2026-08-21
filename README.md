@@ -18,6 +18,7 @@ Analisa arquivos e diretórios e expõe 7 tools por stdio:
 | `complexity_file` | Complexidade ciclomática por função |
 | `unused_symbols_dir` | Símbolos declarados mas nunca referenciados |
 | `rename_preview_dir` | Ocorrências de um nome (renomeação) |
+| `call_graph_file` | Quem chama quem em um arquivo |
 
 Toda tool devolve `elapsed_ms` (tempo de processamento da consulta em milissegundos) junto com o resultado.
 
@@ -641,6 +642,41 @@ Acha **todas as ocorrências** de um nome de símbolo em um diretório (via quer
 
 ---
 
+## `call_graph_file`
+
+Mapeia cada função e método de um arquivo para os **callees** que ela invoca, com contagem de chamadas. Um call pertence à função cujo range o contém.
+
+**Argumentos:**
+
+| Campo | Tipo | Obrigatório | Descrição |
+|---|---|---|---|
+| `path` | string | sim | Arquivo a analisar |
+| `language` | string | não | Omitir para autodetect |
+
+**Request:**
+
+```json
+{"name": "call_graph_file", "arguments": {"path": "internal/engine/engine.go"}}
+```
+
+**Response:**
+
+```json
+{
+  "elapsed_ms": 1.8,
+  "language": "go",
+  "functions": [
+    {"name": "complexityOf", "kind": "functions", "callees": [
+      {"name": "hasLogicalOp", "count": 1}, {"name": "walk", "count": 2}
+    ], "start": {"row": 268, "col": 0}, "end": {"row": 291, "col": 1}}
+  ]
+}
+```
+
+Cada entrada tem `name`, `kind` (functions/methods/constructors), `callees` (nome + `count` de invocações) e o range do símbolo. Útil para entender dependências internas de um arquivo e identificar funções-mãe com muitas chamadas.
+
+---
+
 # Notas de design
 
 - **`text` truncado por padrão**: para manter os outputs pequenos, `text` vem como a primeira linha do nó (até 200 chars). O corpo completo é obtido com `include_text: true` (`symbols_file`/`query_ast_file`) ou via `get_text_file`. Isso evita que listar símbolos de um arquivo grande exploda o contexto.
@@ -650,6 +686,6 @@ Acha **todas as ocorrências** de um nome de símbolo em um diretório (via quer
 # Testes
 
 ```bash
-go test ./...   # parse + símbolos por linguagem; engine (scan, analyze, query, get_text, include_text, search, complexity, unused, rename)
+go test ./...   # parse + símbolos por linguagem; engine (scan, analyze, query, get_text, include_text, search, complexity, unused, rename, callgraph)
 go vet ./...    # gofmt limpo
 ```

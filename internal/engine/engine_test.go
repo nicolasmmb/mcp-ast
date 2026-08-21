@@ -326,6 +326,53 @@ func call() int { return Foo() + 1 }
 	}
 }
 
+func TestCallGraph(t *testing.T) {
+	dir := t.TempDir()
+	src := `package a
+
+func helper() int { return 1 }
+
+func caller(x int) int {
+	if helper() > 0 {
+		return helper() + x
+	}
+	return 0
+}
+
+func main() {
+	_ = caller(1)
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg := lang.NewRegistry()
+	if err := reg.Register(golanglang.Go{}); err != nil {
+		t.Fatal(err)
+	}
+	eng := New(reg)
+
+	graph, err := eng.CallGraph(golanglang.Go{}, filepath.Join(dir, "a.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(graph) != 3 {
+		t.Fatalf("want 3 functions, got %d: %+v", len(graph), graph)
+	}
+	byName := map[string]CallEntry{}
+	for _, f := range graph {
+		byName[f.Name] = f
+	}
+	helper := byName["helper"]
+	if len(helper.Callees) != 0 {
+		t.Fatalf("helper should call nothing, got %+v", helper.Callees)
+	}
+	caller := byName["caller"]
+	if len(caller.Callees) != 1 || caller.Callees[0].Name != "helper" || caller.Callees[0].Count != 2 {
+		t.Fatalf("caller should call helper x2, got %+v", caller.Callees)
+	}
+}
+
 func TestScanCancelled(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\nfunc Foo() int { return 1 }\n"), 0o644); err != nil {
