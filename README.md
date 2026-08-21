@@ -208,6 +208,23 @@ Conectado, as 14 tools aparecem como ferramentas nativas do agente — peça em 
 
 Cada tool — argumentos, exemplos de request/response e convenções de posição — está documentada na seção [# Tools](#tools) abaixo.
 
+### Diagnóstico (logs e debug)
+
+Flags de inicialização para ver o que o servidor está fazendo:
+
+| Flag | Efeito |
+|---|---|
+| `-verbose` | Loga em **stderr** no nível **debug** (cada chamada de tool com nome + `elapsed_ms`) |
+| `-log <caminho>` | Grava o log em **arquivo** (append), nível Info+ — captura erros mesmo sem `-verbose` |
+
+```bash
+ast-mcp -verbose                 # debug no stderr
+ast-mcp -log /tmp/ast-mcp.log    # Info+ (erros/avisos) no arquivo
+ast-mcp -verbose -log /tmp/ast-mcp.log   # ambos
+```
+
+O log registra o startup (versão, timeout, linguagens) e cada tool call — sucesso como `INFO`, falha como `ERROR` com a mensagem. Logs vão para stderr/arquivo, **nunca** para stdout (reservado ao transporte MCP).
+
 ## Commits, tags e versões
 
 ### Como commitar e publicar

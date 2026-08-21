@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"log/slog"
 	"reflect"
 	"time"
 
@@ -14,6 +15,13 @@ var toolTimeout = 30 * time.Second
 
 // SetToolTimeout configures the per-tool-call timeout. d <= 0 disables it.
 func SetToolTimeout(d time.Duration) { toolTimeout = d }
+
+// logger receives per-tool-call diagnostics. Disabled by default; enable via
+// SetLogger (see -verbose/-log flags in cmd/ast-mcp).
+var logger = slog.New(slog.DiscardHandler)
+
+// SetLogger configures the logger used to report tool calls.
+func SetLogger(l *slog.Logger) { logger = l }
 
 // Timed is embedded in every tool output so all responses carry the
 // processing time of the query.
@@ -39,8 +47,18 @@ func timed[In any, Out TimedOutput](h func(context.Context, *mcp.CallToolRequest
 		}
 		start := time.Now()
 		res, out, err := h(ctx, req, in)
+		ms := float64(time.Since(start).Microseconds()) / 1000
 		if v := reflect.ValueOf(out); v.Kind() == reflect.Pointer && !v.IsNil() {
-			out.SetElapsedMS(float64(time.Since(start).Microseconds()) / 1000)
+			out.SetElapsedMS(ms)
+		}
+		name := "?"
+		if req != nil && req.Params != nil {
+			name = req.Params.Name
+		}
+		if err != nil {
+			logger.Error("tool", "tool", name, "elapsed_ms", ms, "error", err)
+		} else {
+			logger.Info("tool", "tool", name, "elapsed_ms", ms)
 		}
 		return res, out, err
 	}
