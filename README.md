@@ -134,6 +134,14 @@ Instalação automática (detecta OS/arquitetura, baixa a `latest` e adiciona ao
 curl -fsSL https://raw.githubusercontent.com/nicolasmmb/mcp-ast/main/install.sh | bash
 ```
 
+**Windows** (PowerShell — não funciona `bash`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/nicolasmmb/mcp-ast/main/install.ps1 | iex"
+```
+
+O instalador detecta `amd64`/`arm64`, baixa `ast-mcp-windows-<arch>.exe` para `%LOCALAPPDATA%\ast-mcp\` e adiciona ao PATH do usuário (reabra o terminal depois).
+
 Ou manualmente: baixe de uma [release](https://github.com/nicolasmmb/mcp-ast/releases) o binário da sua plataforma, torne-o executável e coloque-o no `PATH`:
 
 ```bash
@@ -162,7 +170,7 @@ go build -o ast-mcp ./cmd/ast-mcp
   "mcp": {
     "ast-mcp": {
       "type": "local",
-      "command": ["/usr/local/bin/ast-mcp"]
+      "command": ["ast-mcp"]
     }
   }
 }
@@ -171,13 +179,13 @@ go build -o ast-mcp ./cmd/ast-mcp
 **Claude Code** (config do projeto ou global):
 
 ```json
-{ "mcpServers": { "ast-mcp": { "command": "/usr/local/bin/ast-mcp" } } }
+{ "mcpServers": { "ast-mcp": { "command": "ast-mcp" } } }
 ```
 
 **Claude Desktop** (`claude_desktop_config.json`):
 
 ```json
-{ "mcpServers": { "ast-mcp": { "command": "/usr/local/bin/ast-mcp" } } }
+{ "mcpServers": { "ast-mcp": { "command": "ast-mcp" } } }
 ```
 
 **Outros clientes** (VS Code, Cursor, JetBrains, etc.) seguem o mesmo padrão `mcpServers` — basta apontar `command` para o caminho do binário.
@@ -193,7 +201,7 @@ Sem cliente, teste o servidor por stdio (as três mensagens são o handshake `in
     '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}' \
     '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
     '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'; sleep 1 ) \
-  | /usr/local/bin/ast-mcp
+  | ast-mcp
 ```
 
 A resposta ao `initialize` traz `serverInfo` (name `ast-mcp`, version = a tag da release, ex.: `v0.1.3`; localmente `dev`), e o `tools/list` retorna as 14 tools.
