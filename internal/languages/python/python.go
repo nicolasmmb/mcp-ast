@@ -4,7 +4,7 @@ import (
 	ts "github.com/tree-sitter/go-tree-sitter"
 	tree_sitter_python "github.com/tree-sitter/tree-sitter-python/bindings/go"
 
-	"mcp-java-ast/internal/lang"
+	"mcp-ast/internal/lang"
 )
 
 type Python struct{}

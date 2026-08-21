@@ -25,7 +25,7 @@ Toda tool devolve `elapsed_ms` (tempo de processamento da consulta em milissegun
 ## Estrutura
 
 ```
-mcp-java-ast/
+mcp-ast/
 ├── cmd/ast-mcp/main.go        # entrypoint: registra linguagens + cria o servidor MCP
 ├── internal/
 │   ├── lang/lang.go           # interface Language + registry com pool de parsers

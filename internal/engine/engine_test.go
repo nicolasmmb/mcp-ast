@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"mcp-java-ast/internal/lang"
-	golanglang "mcp-java-ast/internal/languages/go"
+	"mcp-ast/internal/lang"
+	golanglang "mcp-ast/internal/languages/go"
 )
 
 func TestScanSymbolsAndAnalyze(t *testing.T) {

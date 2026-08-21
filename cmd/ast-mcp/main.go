@@ -8,12 +8,12 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"mcp-java-ast/internal/engine"
-	"mcp-java-ast/internal/lang"
-	golanglang "mcp-java-ast/internal/languages/go"
-	"mcp-java-ast/internal/languages/java"
-	"mcp-java-ast/internal/languages/python"
-	"mcp-java-ast/internal/tools"
+	"mcp-ast/internal/engine"
+	"mcp-ast/internal/lang"
+	golanglang "mcp-ast/internal/languages/go"
+	"mcp-ast/internal/languages/java"
+	"mcp-ast/internal/languages/python"
+	"mcp-ast/internal/tools"
 )
 
 func main() {

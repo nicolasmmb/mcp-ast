@@ -11,7 +11,7 @@ import (
 
 	ts "github.com/tree-sitter/go-tree-sitter"
 
-	"mcp-java-ast/internal/lang"
+	"mcp-ast/internal/lang"
 )
 
 type Point struct {

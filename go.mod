@@ -1,4 +1,4 @@
-module mcp-java-ast
+module mcp-ast
 
 go 1.26.3
 

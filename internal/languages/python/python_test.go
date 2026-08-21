@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"mcp-java-ast/internal/engine"
-	"mcp-java-ast/internal/lang"
+	"mcp-ast/internal/engine"
+	"mcp-ast/internal/lang"
 )
 
 func TestParseAndSymbols(t *testing.T) {

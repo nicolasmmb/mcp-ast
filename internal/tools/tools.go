@@ -6,8 +6,8 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"mcp-java-ast/internal/engine"
-	"mcp-java-ast/internal/lang"
+	"mcp-ast/internal/engine"
+	"mcp-ast/internal/lang"
 )
 
 type tools struct {
