@@ -122,6 +122,46 @@ Ou baixe o binário pronto de uma [release](https://github.com/nicolasmmb/mcp-as
 
 Releases são geradas automaticamente: a cada push em `main` um workflow calcula a próxima versão (`feat:` → minor, senão patch), cria a tag `vX.Y.Z` e publica os binários (com checksum `.sha256`).
 
+## Commits, tags e versões
+
+### Como commitar e publicar
+
+Tudo é dirigido por push em `main` — você não cria tag nem release na mão:
+
+```bash
+git add <arquivos>
+git commit -m "refat: descreva a mudança"
+git push origin main
+```
+
+O push dispara o workflow `release` (`.github/workflows/release.yml`), que executa na ordem:
+
+1. **`tag`** — calcula a próxima versão e cria/push a tag `vX.Y.Z`.
+2. **`build`** — gate `go vet` + `go test`, depois builda 5 binários em runners nativos: `linux/amd64`, `linux/arm64`, `darwin/amd64` (cross no runner arm64), `darwin/arm64`, `windows/amd64` (+ `.sha256` de cada).
+3. **`release`** — publica a [GitHub Release](https://github.com/nicolasmmb/mcp-ast/releases) com todos os binários e checksums.
+
+### Como a versão é calculada
+
+- Parte da tag mais recente (`git describe --tags --abbrev=0`); se não houver nenhuma, começa em `v0.1.0`.
+- **Patch** (`v0.1.0 → v0.1.1`): mudanças que não começam com `feat` (ex.: `fix:`, `refat:`, `docs:`, `chore:`, `ci:`).
+- **Minor** (`v0.1.x → v0.2.0`): quando algum commit desde a última tag começa com `feat`, `feat(scope):`, `feat!` ou contém `BREAKING`.
+- Não há **major** automático.
+
+### Convenção de mensagens de commit (opcional)
+
+Só o prefixo do primeiro commit da faixa importa para o bump, mas seguir a convenção mantém o histórico limpo:
+
+```
+feat: adiciona nova tool X          # → minor
+feat(scope): muda Y                 # → minor
+fix: corrige bug                    # → patch
+refat: simplifica Z                 # → patch
+docs: atualiza README               # → patch
+ci: ajusta workflow                 # → patch
+```
+
+Binários reportam a versão do release via `-X main.version=vX.Y.Z` (campo `version` do servidor; localmente sem tag é `dev`).
+
 Servidor stdio — funciona com qualquer cliente MCP. Exemplo de config opencode (`opencode.json`):
 
 ```json
