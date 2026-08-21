@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -35,7 +36,7 @@ func (t T) Bar() {}
 	}
 	eng := New(reg)
 
-	scanned, errs, err := eng.ScanSymbols(dir, nil)
+	scanned, errs, err := eng.ScanSymbols(context.Background(), dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +100,7 @@ func (t T) Bar() {}
 		t.Fatalf("include_text functions: %+v", full["functions"])
 	}
 
-	variables, errs, err := eng.ScanVariables(dir, golanglang.Go{})
+	variables, errs, err := eng.ScanVariables(context.Background(), dir, golanglang.Go{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +151,7 @@ func (t T) Bar() {}
 	eng := New(reg)
 
 	// find declarations of Foo
-	result, err := eng.SearchName(dir, "Foo", "", 0)
+	result, err := eng.SearchName(context.Background(), dir, "Foo", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +164,7 @@ func (t T) Bar() {}
 	}
 
 	// a name that only appears as a type declaration
-	result, err = eng.SearchName(dir, "T", "go", 0)
+	result, err = eng.SearchName(context.Background(), dir, "T", "go", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +173,7 @@ func (t T) Bar() {}
 	}
 
 	// limit caps results
-	result, err = eng.SearchName(dir, "Foo", "", 1)
+	result, err = eng.SearchName(context.Background(), dir, "Foo", "", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,11 +182,30 @@ func (t T) Bar() {}
 	}
 
 	// undefined name -> 0 matches, not null
-	result, err = eng.SearchName(dir, "Nope", "", 0)
+	result, err = eng.SearchName(context.Background(), dir, "Nope", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Total != 0 || result.Matches == nil {
 		t.Fatalf("want 0 matches non-null, got %+v", result)
+	}
+}
+
+func TestScanCancelled(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\nfunc Foo() int { return 1 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg := lang.NewRegistry()
+	if err := reg.Register(golanglang.Go{}); err != nil {
+		t.Fatal(err)
+	}
+	eng := New(reg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err := eng.ScanSymbols(ctx, dir, nil)
+	if err != context.Canceled {
+		t.Fatalf("want context.Canceled, got %v", err)
 	}
 }

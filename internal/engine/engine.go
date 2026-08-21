@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -139,12 +140,16 @@ func (e *Engine) SymbolsText(l lang.Language, path string, fullText bool) (map[s
 // ScanSymbols walks dir recursively and collects symbols for every file that
 // matches the language's extensions (or auto-detected when filter is nil).
 // Unreadable/unparseable files are reported in errors instead of failing.
-func (e *Engine) ScanSymbols(dir string, filter lang.Language) (map[string]map[string][]Symbol, map[string]string, error) {
+// ctx cancels the walk (e.g. tool-call timeout); on cancel it returns ctx.Err.
+func (e *Engine) ScanSymbols(ctx context.Context, dir string, filter lang.Language) (map[string]map[string][]Symbol, map[string]string, error) {
 	files := make(map[string]map[string][]Symbol)
 	errs := make(map[string]string)
 	walk := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
 		if d.IsDir() {
 			if path != dir && strings.HasPrefix(d.Name(), ".") {
@@ -190,8 +195,8 @@ func hasExt(name string, exts []string) bool {
 
 // ScanVariables walks dir recursively and returns only the variables of every
 // recognized source file, grouped by file path. Mirrors ScanSymbols.
-func (e *Engine) ScanVariables(dir string, filter lang.Language) (map[string][]Symbol, map[string]string, error) {
-	files, errs, err := e.ScanSymbols(dir, filter)
+func (e *Engine) ScanVariables(ctx context.Context, dir string, filter lang.Language) (map[string][]Symbol, map[string]string, error) {
+	files, errs, err := e.ScanSymbols(ctx, dir, filter)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -327,7 +332,7 @@ type SearchMatch struct {
 // SearchName walks dir and returns every symbol whose name equals name,
 // using the language's built-in tree-sitter symbol queries (declarations
 // only: classes, functions, variables, ...). limit caps matches (0 = all).
-func (e *Engine) SearchName(dir, name, langName string, limit int) (*SearchResult, error) {
+func (e *Engine) SearchName(ctx context.Context, dir, name, langName string, limit int) (*SearchResult, error) {
 	var filter lang.Language
 	if langName != "" {
 		var err error
@@ -336,7 +341,7 @@ func (e *Engine) SearchName(dir, name, langName string, limit int) (*SearchResul
 			return nil, err
 		}
 	}
-	files, errs, err := e.ScanSymbols(dir, filter)
+	files, errs, err := e.ScanSymbols(ctx, dir, filter)
 	if err != nil {
 		return nil, err
 	}

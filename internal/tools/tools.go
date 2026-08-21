@@ -201,7 +201,7 @@ func (t *tools) scanSymbols(ctx context.Context, req *mcp.CallToolRequest, in sc
 			return nil, nil, err
 		}
 	}
-	files, errs, err := t.engine.ScanSymbols(in.Path, filter)
+	files, errs, err := t.engine.ScanSymbols(ctx, in.Path, filter)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -233,7 +233,7 @@ func (t *tools) scanVariables(ctx context.Context, req *mcp.CallToolRequest, in 
 			return nil, nil, err
 		}
 	}
-	variables, errs, err := t.engine.ScanVariables(in.Path, filter)
+	variables, errs, err := t.engine.ScanVariables(ctx, in.Path, filter)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -310,7 +310,7 @@ type searchNameOutput struct {
 }
 
 func (t *tools) searchName(ctx context.Context, req *mcp.CallToolRequest, in searchNameInput) (*mcp.CallToolResult, *searchNameOutput, error) {
-	result, err := t.engine.SearchName(in.Path, in.Name, in.Language, in.Limit)
+	result, err := t.engine.SearchName(ctx, in.Path, in.Name, in.Language, in.Limit)
 	if err != nil {
 		return nil, nil, err
 	}
