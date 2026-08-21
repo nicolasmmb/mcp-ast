@@ -212,22 +212,27 @@ type scanSymbolsOutput struct {
 	Errors   map[string]string                     `json:"errors,omitempty"`
 }
 
+// langFilter resolves an optional language filter for directory scans and
+// returns the display name ("auto" when no filter is given).
+func (t *tools) langFilter(name, path string) (lang.Language, string, error) {
+	if name == "" {
+		return nil, "auto", nil
+	}
+	l, err := t.engine.Resolve(name, path)
+	if err != nil {
+		return nil, "", err
+	}
+	return l, l.Name(), nil
+}
+
 func (t *tools) scanSymbols(ctx context.Context, req *mcp.CallToolRequest, in scanSymbolsInput) (*mcp.CallToolResult, *scanSymbolsOutput, error) {
-	var filter lang.Language
-	if in.Language != "" {
-		var err error
-		filter, err = t.engine.Resolve(in.Language, in.Path)
-		if err != nil {
-			return nil, nil, err
-		}
+	filter, langName, err := t.langFilter(in.Language, in.Path)
+	if err != nil {
+		return nil, nil, err
 	}
 	files, errs, err := t.engine.ScanSymbols(ctx, in.Path, filter)
 	if err != nil {
 		return nil, nil, err
-	}
-	langName := "auto"
-	if filter != nil {
-		langName = filter.Name()
 	}
 	return nil, &scanSymbolsOutput{Language: langName, Files: files, Errors: errs}, nil
 }
@@ -245,21 +250,13 @@ type scanVariablesOutput struct {
 }
 
 func (t *tools) scanVariables(ctx context.Context, req *mcp.CallToolRequest, in scanVariablesInput) (*mcp.CallToolResult, *scanVariablesOutput, error) {
-	var filter lang.Language
-	if in.Language != "" {
-		var err error
-		filter, err = t.engine.Resolve(in.Language, in.Path)
-		if err != nil {
-			return nil, nil, err
-		}
+	filter, langName, err := t.langFilter(in.Language, in.Path)
+	if err != nil {
+		return nil, nil, err
 	}
 	variables, errs, err := t.engine.ScanVariables(ctx, in.Path, filter)
 	if err != nil {
 		return nil, nil, err
-	}
-	langName := "auto"
-	if filter != nil {
-		langName = filter.Name()
 	}
 	return nil, &scanVariablesOutput{Language: langName, Variables: variables, Errors: errs}, nil
 }
@@ -374,21 +371,13 @@ type unusedSymbolsOutput struct {
 }
 
 func (t *tools) unusedSymbols(ctx context.Context, req *mcp.CallToolRequest, in unusedSymbolsInput) (*mcp.CallToolResult, *unusedSymbolsOutput, error) {
-	var filter lang.Language
-	if in.Language != "" {
-		var err error
-		filter, err = t.engine.Resolve(in.Language, in.Path)
-		if err != nil {
-			return nil, nil, err
-		}
+	filter, langName, err := t.langFilter(in.Language, in.Path)
+	if err != nil {
+		return nil, nil, err
 	}
 	result, err := t.engine.UnusedSymbols(ctx, in.Path, filter, in.Limit)
 	if err != nil {
 		return nil, nil, err
-	}
-	langName := "auto"
-	if filter != nil {
-		langName = filter.Name()
 	}
 	return nil, &unusedSymbolsOutput{Language: langName, Symbols: result.Matches, Errors: result.Errors}, nil
 }
@@ -408,15 +397,13 @@ type renamePreviewOutput struct {
 }
 
 func (t *tools) renamePreview(ctx context.Context, req *mcp.CallToolRequest, in renamePreviewInput) (*mcp.CallToolResult, *renamePreviewOutput, error) {
-	matches, errs, err := t.engine.RenamePreview(ctx, in.Path, in.Name, in.Language, in.Limit)
+	_, langName, err := t.langFilter(in.Language, in.Path)
 	if err != nil {
 		return nil, nil, err
 	}
-	langName := "auto"
-	if in.Language != "" {
-		if l, lerr := t.engine.Resolve(in.Language, in.Path); lerr == nil {
-			langName = l.Name()
-		}
+	matches, errs, err := t.engine.RenamePreview(ctx, in.Path, in.Name, in.Language, in.Limit)
+	if err != nil {
+		return nil, nil, err
 	}
 	return nil, &renamePreviewOutput{Language: langName, Matches: matches, Errors: errs}, nil
 }
@@ -459,21 +446,13 @@ type callersOutput struct {
 }
 
 func (t *tools) callers(ctx context.Context, req *mcp.CallToolRequest, in callersInput) (*mcp.CallToolResult, *callersOutput, error) {
-	var filter lang.Language
-	if in.Language != "" {
-		var err error
-		filter, err = t.engine.Resolve(in.Language, in.Path)
-		if err != nil {
-			return nil, nil, err
-		}
+	_, langName, err := t.langFilter(in.Language, in.Path)
+	if err != nil {
+		return nil, nil, err
 	}
 	callers, errs, err := t.engine.Callers(ctx, in.Path, in.Name, in.Language, in.Limit)
 	if err != nil {
 		return nil, nil, err
-	}
-	langName := "auto"
-	if filter != nil {
-		langName = filter.Name()
 	}
 	return nil, &callersOutput{Language: langName, Callers: callers, Errors: errs}, nil
 }
