@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -15,6 +17,10 @@ import (
 )
 
 func main() {
+	timeout := flag.Duration("tool-timeout", 30*time.Second, "per-tool-call timeout (0 disables)")
+	flag.Parse()
+	tools.SetToolTimeout(*timeout)
+
 	reg := lang.NewRegistry()
 	for _, l := range []lang.Language{java.Java{}, python.Python{}, golanglang.Go{}} {
 		if err := reg.Register(l); err != nil {
