@@ -214,14 +214,18 @@ Flags de inicialização para ver o que o servidor está fazendo:
 
 | Flag | Efeito |
 |---|---|
+| `--version` | Imprime a versão (`ast-mcp vX.Y.Z`) e sai; localmente sem tag é `dev` |
 | `-verbose` | Loga em **stderr** no nível **debug** (cada chamada de tool com nome + `elapsed_ms`) |
 | `-log <caminho>` | Grava o log em **arquivo** (append), nível Info+ — captura erros mesmo sem `-verbose` |
 
 ```bash
+ast-mcp --version                # ast-mcp v0.2.0
 ast-mcp -verbose                 # debug no stderr
 ast-mcp -log /tmp/ast-mcp.log    # Info+ (erros/avisos) no arquivo
 ast-mcp -verbose -log /tmp/ast-mcp.log   # ambos
 ```
+
+A versão vem da tag do release, injetada no build (`-ldflags "-X main.version=vX.Y.Z"`); é a mesma reportada no `serverInfo.version` do MCP.
 
 O log registra o startup (versão, timeout, linguagens) e cada tool call — sucesso como `INFO`, falha como `ERROR` com a mensagem. Logs vão para stderr/arquivo, **nunca** para stdout (reservado ao transporte MCP).
 

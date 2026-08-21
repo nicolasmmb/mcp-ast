@@ -27,7 +27,13 @@ func main() {
 	timeout := flag.Duration("tool-timeout", 30*time.Second, "per-tool-call timeout (0 disables)")
 	verbose := flag.Bool("verbose", false, "log debug output to stderr")
 	logPath := flag.String("log", "", "write log to file (append)")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("ast-mcp %s\n", version)
+		return
+	}
 	tools.SetToolTimeout(*timeout)
 
 	logger, closeLog := newLogger(*verbose, *logPath)
