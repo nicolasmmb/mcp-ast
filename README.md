@@ -128,7 +128,13 @@ O servidor fala **MCP por stdio**: lê mensagens JSON-RPC da entrada padrão e r
 
 ### 1. Obtenha o binário
 
-Baixe de uma [release](https://github.com/nicolasmmb/mcp-ast/releases) o binário da sua plataforma, torne-o executável e coloque-o no `PATH`:
+Instalação automática (detecta OS/arquitetura, baixa a `latest` e adiciona ao `PATH`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nicolasmmb/mcp-ast/main/install.sh | bash
+```
+
+Ou manualmente: baixe de uma [release](https://github.com/nicolasmmb/mcp-ast/releases) o binário da sua plataforma, torne-o executável e coloque-o no `PATH`:
 
 ```bash
 # exemplo (macOS arm64)
