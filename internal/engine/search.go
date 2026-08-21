@@ -73,7 +73,24 @@ func (e *Engine) UnusedSymbols(ctx context.Context, dir string, filter lang.Lang
 	if len(errs) > 0 {
 		result.Errors = errs
 	}
-	// first pass: map symbol name -> one declaration site (file/kind/pos)
+	decls := collectDeclarations(files)
+	counts := countOccurrences(files, decls)
+	for name, d := range decls {
+		if counts[name] != 1 {
+			continue
+		}
+		result.Matches = append(result.Matches, d)
+		result.Total++
+		if limit > 0 && result.Total >= limit {
+			return result, nil
+		}
+	}
+	return result, nil
+}
+
+// collectDeclarations builds a map of symbol name → first declaration site,
+// skipping imports.
+func collectDeclarations(files map[string]map[string][]Symbol) map[string]SearchMatch {
 	decls := make(map[string]SearchMatch)
 	for path, kinds := range files {
 		for kind, syms := range kinds {
@@ -90,7 +107,12 @@ func (e *Engine) UnusedSymbols(ctx context.Context, dir string, filter lang.Lang
 			}
 		}
 	}
-	// second pass: count total textual occurrences per name across all files
+	return decls
+}
+
+// countOccurrences counts total textual occurrences of each declared name
+// across all files.
+func countOccurrences(files map[string]map[string][]Symbol, decls map[string]SearchMatch) map[string]int {
 	counts := make(map[string]int, len(decls))
 	for path := range files {
 		src, err := os.ReadFile(path)
@@ -101,15 +123,5 @@ func (e *Engine) UnusedSymbols(ctx context.Context, dir string, filter lang.Lang
 			counts[name] += bytes.Count(src, []byte(name))
 		}
 	}
-	for name, d := range decls {
-		if counts[name] != 1 {
-			continue
-		}
-		result.Matches = append(result.Matches, d)
-		result.Total++
-		if limit > 0 && result.Total >= limit {
-			return result, nil
-		}
-	}
-	return result, nil
+	return counts
 }
