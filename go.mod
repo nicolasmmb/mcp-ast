@@ -18,6 +18,7 @@ require (
 	github.com/tree-sitter/tree-sitter-bash v0.25.1 // indirect
 	github.com/tree-sitter/tree-sitter-c-sharp v0.23.5 // indirect
 	github.com/tree-sitter/tree-sitter-javascript v0.25.0 // indirect
+	github.com/tree-sitter/tree-sitter-rust v0.24.2 // indirect
 	github.com/tree-sitter/tree-sitter-typescript v0.23.2 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	golang.org/x/oauth2 v0.35.0 // indirect

@@ -20,6 +20,7 @@ import (
 	"mcp-ast/internal/languages/csharp"
 	"mcp-ast/internal/languages/javascript"
 	"mcp-ast/internal/languages/python"
+	"mcp-ast/internal/languages/rust"
 	"mcp-ast/internal/languages/typescript"
 	"mcp-ast/internal/tools"
 )
@@ -47,7 +48,7 @@ func main() {
 	tools.SetLogger(logger)
 
 	reg := lang.NewRegistry()
-	for _, l := range []lang.Language{java.Java{}, python.Python{}, golanglang.Go{}, bash.Bash{}, csharp.CSharp{}, javascript.JavaScript{}, typescript.TypeScript{}} {
+	for _, l := range []lang.Language{java.Java{}, python.Python{}, golanglang.Go{}, bash.Bash{}, csharp.CSharp{}, javascript.JavaScript{}, rust.Rust{}, typescript.TypeScript{}} {
 		if err := reg.Register(l); err != nil {
 			log.Fatalf("registering language: %v", err)
 		}
