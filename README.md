@@ -19,6 +19,7 @@ Analisa arquivos e diretórios e expõe 7 tools por stdio:
 | `unused_symbols_dir` | Símbolos declarados mas nunca referenciados |
 | `rename_preview_dir` | Ocorrências de um nome (renomeação) |
 | `call_graph_file` | Quem chama quem em um arquivo |
+| `callers_dir` | Quem chama um alvo no diretório inteiro |
 
 Toda tool devolve `elapsed_ms` (tempo de processamento da consulta em milissegundos) junto com o resultado.
 
@@ -677,6 +678,41 @@ Cada entrada tem `name`, `kind` (functions/methods/constructors), `callees` (nom
 
 ---
 
+## `callers_dir`
+
+O reverso do `call_graph_file`: dado um **nome alvo**, acha todas as funções/métodos que o chamam em um diretório, agregando os call sites por função chamadora.
+
+**Argumentos:**
+
+| Campo | Tipo | Obrigatório | Descrição |
+|---|---|---|---|
+| `name` | string | sim | Nome da função/método alvo |
+| `path` | string | sim | Diretório para buscar recursivamente |
+| `language` | string | não | Filtrar por linguagem. Omitir para auto |
+| `limit` | int | não | Máximo de resultados (0 = sem limite) |
+
+**Request:**
+
+```json
+{"name": "callers_dir", "arguments": {"name": "countNodes", "path": "internal/engine"}}
+```
+
+**Response:**
+
+```json
+{
+  "elapsed_ms": 12.3,
+  "language": "auto",
+  "callers": [
+    {"file": "internal/engine/engine.go", "name": "Analyze", "kind": "methods", "line": 335, "col": 13, "count": 1}
+  ]
+}
+```
+
+Cada entrada é uma função chamadora com `file`, `name`, `kind`, posição do símbolo e `count` (quantas vezes chama o alvo). Mesma cobertura do `call_graph_file`: chamadas de método via `selector` (`obj.foo()`) são capturadas pelo nome do campo; o `count` agrega múltiplos call sites da mesma função.
+
+---
+
 # Notas de design
 
 - **`text` truncado por padrão**: para manter os outputs pequenos, `text` vem como a primeira linha do nó (até 200 chars). O corpo completo é obtido com `include_text: true` (`symbols_file`/`query_ast_file`) ou via `get_text_file`. Isso evita que listar símbolos de um arquivo grande exploda o contexto.
@@ -686,6 +722,6 @@ Cada entrada tem `name`, `kind` (functions/methods/constructors), `callees` (nom
 # Testes
 
 ```bash
-go test ./...   # parse + símbolos por linguagem; engine (scan, analyze, query, get_text, include_text, search, complexity, unused, rename, callgraph)
+go test ./...   # parse + símbolos por linguagem; engine (scan, analyze, query, get_text, include_text, search, complexity, unused, rename, callgraph, callers)
 go vet ./...    # gofmt limpo
 ```

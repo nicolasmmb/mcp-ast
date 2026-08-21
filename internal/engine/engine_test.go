@@ -373,6 +373,63 @@ func main() {
 	}
 }
 
+func TestCallers(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"a.go": `package a
+
+func helper() int { return 1 }
+
+func alpha() int { return helper() }
+
+func beta(x int) int {
+	return helper() + helper() + x
+}
+`,
+		"b.go": `package b
+
+func gamma() int { return 0 }
+`,
+	}
+	for name, src := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reg := lang.NewRegistry()
+	if err := reg.Register(golanglang.Go{}); err != nil {
+		t.Fatal(err)
+	}
+	eng := New(reg)
+
+	callers, _, err := eng.Callers(context.Background(), dir, "helper", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(callers) != 2 {
+		t.Fatalf("want 2 callers of helper (alpha, beta), got %+v", callers)
+	}
+	byName := map[string]int{}
+	for _, c := range callers {
+		byName[c.Name] = c.Count
+	}
+	if byName["alpha"] != 1 {
+		t.Fatalf("alpha should call helper 1x, got %d", byName["alpha"])
+	}
+	if byName["beta"] != 2 {
+		t.Fatalf("beta should call helper 2x, got %d", byName["beta"])
+	}
+
+	// no callers -> empty non-nil slice
+	callers, _, err = eng.Callers(context.Background(), dir, "gamma", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(callers) != 0 {
+		t.Fatalf("gamma should have 0 callers, got %+v", callers)
+	}
+}
+
 func TestScanCancelled(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\nfunc Foo() int { return 1 }\n"), 0o644); err != nil {

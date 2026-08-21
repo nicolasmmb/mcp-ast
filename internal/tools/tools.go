@@ -103,6 +103,10 @@ func Register(s *mcp.Server, eng *engine.Engine) {
 		Name:        "call_graph_file",
 		Description: "Map each function and method in a source file to the callees it invokes, with call counts.",
 	}, timed(t.callGraph))
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "callers_dir",
+		Description: "Find every function and method across a directory that calls a target, aggregating call sites per caller.",
+	}, timed(t.callers))
 }
 
 type listLanguagesInput struct{}
@@ -438,4 +442,38 @@ func (t *tools) callGraph(ctx context.Context, req *mcp.CallToolRequest, in call
 		return nil, nil, err
 	}
 	return nil, &callGraphOutput{Language: l.Name(), Functions: functions}, nil
+}
+
+type callersInput struct {
+	Name     string `json:"name" jsonschema:"target function/method name to find callers of"`
+	Path     string `json:"path" jsonschema:"directory to scan recursively"`
+	Language string `json:"language,omitempty" jsonschema:"optional; language name (e.g. go). Omit to auto-detect each file by extension"`
+	Limit    int    `json:"limit,omitempty" jsonschema:"optional; maximum number of results, 0 = unlimited"`
+}
+
+type callersOutput struct {
+	Timed
+	Language string            `json:"language"`
+	Callers  []engine.Caller   `json:"callers"`
+	Errors   map[string]string `json:"errors,omitempty"`
+}
+
+func (t *tools) callers(ctx context.Context, req *mcp.CallToolRequest, in callersInput) (*mcp.CallToolResult, *callersOutput, error) {
+	var filter lang.Language
+	if in.Language != "" {
+		var err error
+		filter, err = t.engine.Resolve(in.Language, in.Path)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	callers, errs, err := t.engine.Callers(ctx, in.Path, in.Name, in.Language, in.Limit)
+	if err != nil {
+		return nil, nil, err
+	}
+	langName := "auto"
+	if filter != nil {
+		langName = filter.Name()
+	}
+	return nil, &callersOutput{Language: langName, Callers: callers, Errors: errs}, nil
 }
