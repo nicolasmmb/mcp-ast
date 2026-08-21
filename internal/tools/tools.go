@@ -55,32 +55,32 @@ func Register(s *mcp.Server, eng *engine.Engine) {
 		Description: "List the programming languages supported by this AST analysis server.",
 	}, timed(t.listLanguages))
 	mcp.AddTool(s, &mcp.Tool{
-		Name:         "parse_ast",
+		Name:         "parse_ast_file",
 		Description:  "Parse a source file and return its abstract syntax tree (AST) as JSON. Language is auto-detected from the file extension when omitted.",
 		OutputSchema: parseASTSchema,
 	}, timed(t.parseAST))
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "query_ast",
+		Name:        "query_ast_file",
 		Description: "Run a tree-sitter query over a source file and return the matches with captures, text and positions.",
 	}, timed(t.queryAST))
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "symbols",
+		Name:        "symbols_file",
 		Description: "Extract symbols (classes, methods, fields, imports, ...) from a source file, grouped by kind, using the language's built-in queries.",
 	}, timed(t.symbols))
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "scan_symbols",
+		Name:        "scan_symbols_dir",
 		Description: "Recursively scan a directory and return symbols of every recognized source file, grouped by file path. Errors reading individual files are reported per-file.",
 	}, timed(t.scanSymbols))
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "analyze",
+		Name:        "analyze_file",
 		Description: "Compute metrics for a source file: size, node count, nesting depth, and per-symbol-kind line statistics (count, avg/max lines).",
 	}, timed(t.analyze))
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "scan_variables",
+		Name:        "scan_variables_dir",
 		Description: "Recursively scan a directory and return the variables of every recognized source file, grouped by file path. Errors reading individual files are reported per-file.",
 	}, timed(t.scanVariables))
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "get_text",
+		Name:        "get_text_file",
 		Description: "Return the exact source text of a 0-based (row, col) range, e.g. the positions reported on every node, capture or symbol. Use to read full code without truncation.",
 	}, timed(t.getText))
 }

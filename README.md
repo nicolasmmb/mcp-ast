@@ -7,13 +7,13 @@ Analisa arquivos e diretórios e expõe 7 tools por stdio:
 | Tool | Função |
 |---|---|
 | `list_languages` | Linguagens registradas |
-| `parse_ast` | Árvore sintática completa em JSON |
-| `query_ast` | Queries tree-sitter customizadas |
-| `symbols` | Símbolos por tipo (classes, métodos, imports...) |
-| `scan_symbols` | Símbolos de um diretório inteiro |
-| `scan_variables` | Variáveis de um diretório inteiro |
-| `analyze` | Métricas de um arquivo |
-| `get_text` | Código exato de um range de posições |
+| `parse_ast_file` | Árvore sintática completa de um arquivo em JSON |
+| `query_ast_file` | Queries tree-sitter customizadas em um arquivo |
+| `symbols_file` | Símbolos de um arquivo por tipo (classes, métodos, imports...) |
+| `analyze_file` | Métricas de um arquivo |
+| `get_text_file` | Código exato de um range de posições de um arquivo |
+| `scan_symbols_dir` | Símbolos de um diretório inteiro |
+| `scan_variables_dir` | Variáveis de um diretório inteiro |
 
 Toda tool devolve `elapsed_ms` (tempo de processamento da consulta em milissegundos) junto com o resultado.
 
@@ -138,7 +138,7 @@ Lista as linguagens registradas no servidor. Não recebe argumentos.
 
 ---
 
-## `parse_ast`
+## `parse_ast_file`
 
 Parseia um arquivo e devolve a árvore sintática completa (AST) em JSON.
 
@@ -154,7 +154,7 @@ Parseia um arquivo e devolve a árvore sintática completa (AST) em JSON.
 
 ```json
 {
-  "name": "parse_ast",
+  "name": "parse_ast_file",
   "arguments": {"path": "Greeter.java", "max_depth": 5}
 }
 ```
@@ -194,7 +194,7 @@ Cada nó tem `type` (tipo da gramática), `field` (nome do campo filho, ex. `nam
 
 ---
 
-## `query_ast`
+## `query_ast_file`
 
 Roda uma [query tree-sitter](https://tree-sitter.github.io/tree-sitter/using-parsers#pattern-matching-with-queries) sobre um arquivo e devolve os matches com captures, texto e posições.
 
@@ -212,7 +212,7 @@ Roda uma [query tree-sitter](https://tree-sitter.github.io/tree-sitter/using-par
 
 ```json
 {
-  "name": "query_ast",
+  "name": "query_ast_file",
   "arguments": {
     "language": "java",
     "path": "Greeter.java",
@@ -240,7 +240,7 @@ Roda uma [query tree-sitter](https://tree-sitter.github.io/tree-sitter/using-par
 }
 ```
 
-Cada match tem uma lista de `captures` (uma por `@nome` na query), com `name` (o rótulo), `text`, e posições. Por padrão `text` é a **primeira linha** do nó (resumo, evita outputs gigantes). Com `include_text: true` o corpo completo vem embutido — uma chamada só, sem precisar de `get_text` depois.
+Cada match tem uma lista de `captures` (uma por `@nome` na query), com `name` (o rótulo), `text`, e posições. Por padrão `text` é a **primeira linha** do nó (resumo, evita outputs gigantes). Com `include_text: true` o corpo completo vem embutido — uma chamada só, sem precisar de `get_text_file` depois.
 
 **Query inválida** (node type que não existe na gramática):
 
@@ -256,7 +256,7 @@ Cada match tem uma lista de `captures` (uma por `@nome` na query), com `name` (o
 
 ---
 
-## `symbols`
+## `symbols_file`
 
 Extrai símbolos de um arquivo agrupados por tipo, usando as queries embutidas da linguagem.
 
@@ -277,7 +277,7 @@ Tipos por linguagem:
 **Request:**
 
 ```json
-{"name": "symbols", "arguments": {"path": "Greeter.java"}}
+{"name": "symbols_file", "arguments": {"path": "Greeter.java"}}
 ```
 
 **Response:**
@@ -306,11 +306,11 @@ Tipos por linguagem:
 }
 ```
 
-Cada símbolo tem `name`, `text` (resumo de 1 linha; corpo completo com `include_text: true`), e posições usáveis no `get_text`.
+Cada símbolo tem `name`, `text` (resumo de 1 linha; corpo completo com `include_text: true`), e posições usáveis no `get_text_file`.
 
 ---
 
-## `scan_symbols`
+## `scan_symbols_dir`
 
 Varre um diretório recursivamente e devolve os símbolos de todos os arquivos reconhecidos, agrupados por caminho. Ignora pastas ocultas. Erros de arquivos individuais vão em `errors` em vez de abortar a varredura.
 
@@ -324,7 +324,7 @@ Varre um diretório recursivamente e devolve os símbolos de todos os arquivos r
 **Request:**
 
 ```json
-{"name": "scan_symbols", "arguments": {"path": "./internal", "language": "go"}}
+{"name": "scan_symbols_dir", "arguments": {"path": "./internal", "language": "go"}}
 ```
 
 **Response:**
@@ -358,13 +358,13 @@ Varre um diretório recursivamente e devolve os símbolos de todos os arquivos r
 
 ---
 
-## `scan_variables`
+## `scan_variables_dir`
 
 Varre um diretório recursivamente e devolve **apenas as variáveis** de todos os arquivos reconhecidos, agrupadas por caminho. Ignora pastas ocultas. Erros de arquivos individuais vão em `errors` em vez de abortar a varredura.
 
 O que é considerado variável por linguagem:
 
-- **Java**: variáveis locais (corpo de métodos, loops) — campos de classe ficam no kind `fields` do `symbols`
+- **Java**: variáveis locais (corpo de métodos, loops) — campos de classe ficam no kind `fields` do `symbols_file`
 - **Python**: atribuições (`x = ...`)
 - **Go**: `:=` (short var), `var` declarations e campos de struct
 
@@ -378,7 +378,7 @@ O que é considerado variável por linguagem:
 **Request:**
 
 ```json
-{"name": "scan_variables", "arguments": {"path": "./src"}}
+{"name": "scan_variables_dir", "arguments": {"path": "./src"}}
 ```
 
 **Response:**
@@ -404,11 +404,11 @@ O que é considerado variável por linguagem:
 }
 ```
 
-Cada variável tem `name`, `text` (linha da declaração) e posições usáveis no `get_text`. Arquivos sem variáveis são omitidos do map.
+Cada variável tem `name`, `text` (linha da declaração) e posições usáveis no `get_text_file`. Arquivos sem variáveis são omitidos do map.
 
 ---
 
-## `analyze`
+## `analyze_file`
 
 Métricas de um arquivo: tamanho, contagem de nós, profundidade de aninhamento, e estatísticas de linhas por tipo de símbolo.
 
@@ -422,7 +422,7 @@ Métricas de um arquivo: tamanho, contagem de nós, profundidade de aninhamento,
 **Request:**
 
 ```json
-{"name": "analyze", "arguments": {"path": "internal/engine/engine.go"}}
+{"name": "analyze_file", "arguments": {"path": "internal/engine/engine.go"}}
 ```
 
 **Response:**
@@ -450,9 +450,9 @@ Métricas de um arquivo: tamanho, contagem de nós, profundidade de aninhamento,
 
 ---
 
-## `get_text`
+## `get_text_file`
 
-Devolve o texto exato de um range de posições (0-based), como as que qualquer nó/capture/símbolo retorna. É um slice puro do arquivo — não re-parseia, por isso é rápido. Complementa o `symbols`/`query_ast` quando se quer o código completo de um trecho sem `include_text`.
+Devolve o texto exato de um range de posições (0-based), como as que qualquer nó/capture/símbolo retorna. É um slice puro do arquivo — não re-parseia, por isso é rápido. Complementa o `symbols_file`/`query_ast_file` quando se quer o código completo de um trecho sem `include_text`.
 
 **Argumentos:**
 
@@ -465,11 +465,11 @@ Devolve o texto exato de um range de posições (0-based), como as que qualquer 
 | `end_col` | int | sim | Coluna final (exclusiva) |
 | `language` | string | não | Omitir para autodetect |
 
-**Request** (range do método `Analyze` pego de um `symbols` anterior):
+**Request** (range do método `Analyze` pego de um `symbols_file` anterior):
 
 ```json
 {
-  "name": "get_text",
+  "name": "get_text_file",
   "arguments": {
     "path": "internal/engine/engine.go",
     "start_row": 196, "start_col": 0,
@@ -493,7 +493,7 @@ Devolve o texto exato de um range de posições (0-based), como as que qualquer 
 
 # Notas de design
 
-- **`text` truncado por padrão**: para manter os outputs pequenos, `text` vem como a primeira linha do nó (até 200 chars). O corpo completo é obtido com `include_text: true` (`symbols`/`query_ast`) ou via `get_text`. Isso evita que listar símbolos de um arquivo grande exploda o contexto.
+- **`text` truncado por padrão**: para manter os outputs pequenos, `text` vem como a primeira linha do nó (até 200 chars). O corpo completo é obtido com `include_text: true` (`symbols_file`/`query_ast_file`) ou via `get_text_file`. Isso evita que listar símbolos de um arquivo grande exploda o contexto.
 - **`matches`/`captures` sempre `[]`**, nunca `null` — garante compatibilidade com a validação de schema de output do SDK.
 - **Erros** são retornados como erro da tool MCP (`isError: true`) com mensagem clara — ex. query inválida, arquivo inexistente, linguagem desconhecida, `end` antes de `start`.
 
