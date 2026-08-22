@@ -134,54 +134,7 @@ func (e *Engine) Callers(ctx context.Context, dir, target string, filter lang.La
 	callers := make(map[string]*Caller)
 	var order []string
 	errs, err := e.walkFiles(ctx, dir, filter, func(path string, l lang.Language) error {
-		qs, ok := l.AuxQueries()["calls"]
-		if !ok {
-			return nil
-		}
-		src, tree, err := e.parseFile(l, path)
-		if err != nil {
-			return err
-		}
-		defer tree.Close()
-		root := tree.RootNode()
-		funcs := functionRanges(l, root, src)
-		q, qerr := ts.NewQuery(l.Language(), qs)
-		if qerr != nil {
-			return fmt.Errorf("invalid call query: %s", qerr.Message)
-		}
-		defer q.Close()
-		names := q.CaptureNames()
-		c := ts.NewQueryCursor()
-		defer c.Close()
-		it := c.Matches(q, root, src)
-		for m := it.Next(); m != nil; m = it.Next() {
-			var callee string
-			for _, cap := range m.Captures {
-				if names[cap.Index] == "callee" {
-					callee = cap.Node.Utf8Text(src)
-				}
-			}
-			if callee != target {
-				continue
-			}
-			pos := point(m.Captures[0].Node.StartPosition())
-			idx := findFunc(funcs, pos)
-			if idx < 0 {
-				continue
-			}
-			key := path + ":" + funcs[idx].Name
-			cr, ok := callers[key]
-			if !ok {
-				cr = &Caller{
-					File: path, Name: funcs[idx].Name, Kind: funcs[idx].Kind,
-					Line: funcs[idx].Start.Row + 1, Col: funcs[idx].Start.Col,
-				}
-				callers[key] = cr
-				order = append(order, key)
-			}
-			cr.Count++
-		}
-		return nil
+		return e.processFileCallers(l, path, target, callers, &order)
 	})
 	if err != nil {
 		return nil, nil, err
@@ -194,6 +147,69 @@ func (e *Engine) Callers(ctx context.Context, dir, target string, filter lang.La
 		}
 	}
 	return out, errs, nil
+}
+
+// processFileCallers finds all calls to target in a single file and aggregates
+// them into the callers map.
+func (e *Engine) processFileCallers(l lang.Language, path, target string, callers map[string]*Caller, order *[]string) error {
+	qs, ok := l.AuxQueries()["calls"]
+	if !ok {
+		return nil
+	}
+	src, tree, err := e.parseFile(l, path)
+	if err != nil {
+		return err
+	}
+	defer tree.Close()
+	root := tree.RootNode()
+	funcs := functionRanges(l, root, src)
+	q, qerr := ts.NewQuery(l.Language(), qs)
+	if qerr != nil {
+		return fmt.Errorf("invalid call query: %s", qerr.Message)
+	}
+	defer q.Close()
+	names := q.CaptureNames()
+	c := ts.NewQueryCursor()
+	defer c.Close()
+	it := c.Matches(q, root, src)
+	for m := it.Next(); m != nil; m = it.Next() {
+		callee := extractCallee(m, names, src)
+		if callee != target {
+			continue
+		}
+		pos := point(m.Captures[0].Node.StartPosition())
+		idx := findFunc(funcs, pos)
+		if idx < 0 {
+			continue
+		}
+		aggregateCaller(callers, order, path, funcs[idx])
+	}
+	return nil
+}
+
+// extractCallee returns the callee name from a call query match.
+func extractCallee(m *ts.QueryMatch, names []string, src []byte) string {
+	for _, cap := range m.Captures {
+		if names[cap.Index] == "callee" {
+			return cap.Node.Utf8Text(src)
+		}
+	}
+	return ""
+}
+
+// aggregateCaller creates or increments a Caller entry in the map.
+func aggregateCaller(callers map[string]*Caller, order *[]string, path string, fn CallEntry) {
+	key := path + ":" + fn.Name
+	cr, ok := callers[key]
+	if !ok {
+		cr = &Caller{
+			File: path, Name: fn.Name, Kind: fn.Kind,
+			Line: fn.Start.Row + 1, Col: fn.Start.Col,
+		}
+		callers[key] = cr
+		*order = append(*order, key)
+	}
+	cr.Count++
 }
 
 // findFunc returns the index of the innermost function whose range contains pos.

@@ -33,53 +33,69 @@ func (e *Engine) Complexity(l lang.Language, path string) ([]ComplexityEntry, er
 		return nil, err
 	}
 	defer tree.Close()
-	root := tree.RootNode()
+	decisions := buildDecisionSet(l)
+	var out []ComplexityEntry
+	for _, kind := range []string{"functions", "methods", "constructors"} {
+		entries := processFuncKind(l, kind, tree.RootNode(), src, decisions)
+		out = append(out, entries...)
+	}
+	return out, nil
+}
+
+// buildDecisionSet converts DecisionKinds() into a map for O(1) lookup.
+func buildDecisionSet(l lang.Language) map[string]bool {
 	decisions := make(map[string]bool, len(l.DecisionKinds()))
 	for _, k := range l.DecisionKinds() {
 		decisions[k] = true
 	}
-	// function-like symbol queries: name comes from the @name capture,
-	// the body range from the @symbol capture.
-	funcKinds := []string{"functions", "methods", "constructors"}
-	out := []ComplexityEntry{}
-	for _, kind := range funcKinds {
-		qs, ok := l.SymbolQueries()[kind]
-		if !ok {
+	return decisions
+}
+
+// processFuncKind queries one symbol kind and returns complexity entries.
+func processFuncKind(l lang.Language, kind string, root *ts.Node, src []byte, decisions map[string]bool) []ComplexityEntry {
+	qs, ok := l.SymbolQueries()[kind]
+	if !ok {
+		return nil
+	}
+	q, qerr := ts.NewQuery(l.Language(), qs)
+	if qerr != nil {
+		return nil
+	}
+	defer q.Close()
+	c := ts.NewQueryCursor()
+	defer c.Close()
+	names := q.CaptureNames()
+	it := c.Matches(q, root, src)
+	var out []ComplexityEntry
+	for m := it.Next(); m != nil; m = it.Next() {
+		name, symNode := extractSymbolMatch(m, names, src)
+		if symNode == nil {
 			continue
 		}
-		q, qerr := ts.NewQuery(l.Language(), qs)
-		if qerr != nil {
-			return nil, fmt.Errorf("invalid query for %q: %s", kind, qerr.Message)
-		}
-		c := ts.NewQueryCursor()
-		names := q.CaptureNames()
-		it := c.Matches(q, root, src)
-		for m := it.Next(); m != nil; m = it.Next() {
-			var name string
-			var symNode *ts.Node
-			for _, cap := range m.Captures {
-				switch names[cap.Index] {
-				case "name":
-					name = cap.Node.Utf8Text(src)
-				case "symbol":
-					symNode = &cap.Node
-				}
-			}
-			if symNode == nil {
-				continue
-			}
-			out = append(out, ComplexityEntry{
-				Name:       name,
-				Kind:       kind,
-				Complexity: complexityOf(symNode, src, decisions),
-				Start:      point(symNode.StartPosition()),
-				End:        point(symNode.EndPosition()),
-			})
-		}
-		c.Close()
-		q.Close()
+		out = append(out, ComplexityEntry{
+			Name:       name,
+			Kind:       kind,
+			Complexity: complexityOf(symNode, src, decisions),
+			Start:      point(symNode.StartPosition()),
+			End:        point(symNode.EndPosition()),
+		})
 	}
-	return out, nil
+	return out
+}
+
+// extractSymbolMatch extracts the name and symbol node from a query match.
+func extractSymbolMatch(m *ts.QueryMatch, names []string, src []byte) (string, *ts.Node) {
+	var name string
+	var symNode *ts.Node
+	for _, cap := range m.Captures {
+		switch names[cap.Index] {
+		case "name":
+			name = cap.Node.Utf8Text(src)
+		case "symbol":
+			symNode = &cap.Node
+		}
+	}
+	return name, symNode
 }
 
 // complexityOf counts decision nodes in n's subtree: every node whose kind is
