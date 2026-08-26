@@ -33,10 +33,15 @@ func (e *Engine) Complexity(l lang.Language, path string) ([]ComplexityEntry, er
 		return nil, err
 	}
 	defer tree.Close()
+	return e.complexityTree(l, src, tree.RootNode())
+}
+
+// complexityTree is Complexity over an already parsed tree.
+func (e *Engine) complexityTree(l lang.Language, src []byte, root *ts.Node) ([]ComplexityEntry, error) {
 	decisions := buildDecisionSet(l)
 	var out []ComplexityEntry
 	for _, kind := range []string{"functions", "methods", "constructors"} {
-		entries := processFuncKind(l, kind, tree.RootNode(), src, decisions)
+		entries := processFuncKind(l, kind, root, src, decisions)
 		out = append(out, entries...)
 	}
 	return out, nil
@@ -154,14 +159,19 @@ func (e *Engine) Analyze(l lang.Language, path string) (*Metrics, error) {
 		return nil, err
 	}
 	defer tree.Close()
+	return e.analyzeTree(l, src, tree.RootNode())
+}
+
+// analyzeTree is Analyze over an already parsed tree.
+func (e *Engine) analyzeTree(l lang.Language, src []byte, root *ts.Node) (*Metrics, error) {
 	m := &Metrics{
 		Lines: bytes.Count(src, []byte("\n")) + 1,
 		Bytes: len(src),
 		Kinds: make(map[string]KindMetric),
 	}
-	m.Nodes, m.MaxNesting = countNodes(tree.RootNode())
+	m.Nodes, m.MaxNesting = countNodes(root)
 	for kind, qs := range l.SymbolQueries() {
-		matches, err := e.runQuery(l, src, tree.RootNode(), qs, 0, false)
+		matches, err := e.runQuery(l, src, root, qs, 0, false)
 		if err != nil {
 			return nil, fmt.Errorf("symbol query %q: %w", kind, err)
 		}

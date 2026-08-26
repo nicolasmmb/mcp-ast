@@ -14,9 +14,7 @@ import (
 // results grouped by kind (classes, methods, fields, imports, ...).
 func (e *Engine) Symbols(l lang.Language, path string) (map[string][]Symbol, error) {
 	return e.SymbolsText(l, path, false)
-}
-
-// SymbolsText is Symbols with a fullText switch: when true, symbol text is the
+} // SymbolsText is Symbols with a fullText switch: when true, symbol text is the
 // full node source instead of the first-line summary.
 func (e *Engine) SymbolsText(l lang.Language, path string, fullText bool) (map[string][]Symbol, error) {
 	src, tree, err := e.parseFile(l, path)
@@ -54,12 +52,13 @@ func (e *Engine) SymbolsText(l lang.Language, path string, fullText bool) (map[s
 
 // ScanSymbols walks dir recursively and collects symbols for every file that
 // matches the language's extensions (or auto-detected when filter is nil).
+// fullText switches symbol text from a first-line summary to the full source.
 // Unreadable/unparseable files are reported in errors instead of failing.
 // ctx cancels the walk (e.g. tool-call timeout); on cancel it returns ctx.Err.
-func (e *Engine) ScanSymbols(ctx context.Context, dir string, filter lang.Language) (map[string]map[string][]Symbol, map[string]string, error) {
+func (e *Engine) ScanSymbols(ctx context.Context, dir string, filter lang.Language, fullText bool) (map[string]map[string][]Symbol, map[string]string, error) {
 	files := make(map[string]map[string][]Symbol)
 	errs, err := e.walkFiles(ctx, dir, filter, func(path string, l lang.Language) error {
-		syms, err := e.Symbols(l, path)
+		syms, err := e.SymbolsText(l, path, fullText)
 		if err != nil {
 			return err
 		}
@@ -70,22 +69,6 @@ func (e *Engine) ScanSymbols(ctx context.Context, dir string, filter lang.Langua
 		return nil, nil, err
 	}
 	return files, errs, nil
-}
-
-// ScanVariables walks dir recursively and returns only the variables of every
-// recognized source file, grouped by file path. Mirrors ScanSymbols.
-func (e *Engine) ScanVariables(ctx context.Context, dir string, filter lang.Language) (map[string][]Symbol, map[string]string, error) {
-	files, errs, err := e.ScanSymbols(ctx, dir, filter)
-	if err != nil {
-		return nil, nil, err
-	}
-	variables := make(map[string][]Symbol)
-	for path, syms := range files {
-		if v, ok := syms["variables"]; ok && len(v) > 0 {
-			variables[path] = v
-		}
-	}
-	return variables, errs, nil
 }
 
 // walkFiles visits every source file under dir that the language filter (or

@@ -23,6 +23,7 @@ import (
 	"mcp-ast/internal/languages/rust"
 	"mcp-ast/internal/languages/typescript"
 	"mcp-ast/internal/languages/yaml"
+	"mcp-ast/internal/service"
 	"mcp-ast/internal/tools"
 )
 
@@ -57,7 +58,7 @@ func main() {
 	logger.Info("started", "version", version, "tool_timeout", timeout.String(), "languages", reg.List(), "log", *logPath)
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "ast-mcp", Version: version}, nil)
-	tools.Register(server, engine.New(reg))
+	tools.Register(server, service.New(engine.New(reg)))
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		log.Fatal(err)

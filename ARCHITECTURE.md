@@ -1,28 +1,32 @@
 # mcp-ast — Arquitetura e Métricas
 
-Servidor MCP em Go para análise AST de múltiplas linguagens via tree-sitter. Comunica por stdio JSON-RPC, expõe 14 tools.
+Servidor MCP em Go para análise AST de múltiplas linguagens via tree-sitter. Comunica por stdio JSON-RPC, expõe 10 tools.
 
 ## Visão geral
 
 ```
 cmd/ast-mcp/main.go          → CLI + bootstrap MCP server
-  ├── internal/lang/          → Interface Language + Registry (pool de parsers)
-  ├── internal/engine/        → Lógica core (6 arquivos)
-  │     engine.go             → Parse, Query, AST→JSON
-  │     symbols.go            → Extração de símbolos + scan de diretório
-  │     calls.go              → Call graph + caller reverso
-  │     search.go             → Busca por nome + detecção de unused
-  │     metrics.go            → Métricas de arquivo + complexidade ciclomática
-  │     gettext.go            → Extração de texto por posição
-  │     rename.go             → Preview de rename com flag de definição
-  ├── internal/tools/         → Handlers das 14 tools MCP (2 arquivos)
-  │     tools.go              → Definição + handlers
-  │     timing.go             → Wrapper de timeout + elapsed_ms + logging
-  └── internal/languages/     → Implementações por linguagem
-        go/go.go              → Go grammar + queries
-        python/python.go      → Python grammar + queries
-        java/java.go          → Java grammar + queries
+  ├── internal/lang/         → Interface Language + Registry (pool de parsers)
+  ├── internal/engine/       → Operações tree-sitter puras (8 arquivos)
+  │     engine.go            → Parse, Query, AST→JSON
+  │     symbols.go           → Extração de símbolos + scan de diretório
+  │     calls.go             → Call graph + caller reverso (+ functionRanges/findFunc)
+  │     search.go            → Detecção de unused symbols
+  │     metrics.go           → Métricas de arquivo + complexidade (variantes *Tree)
+  │     usages.go            → Ocorrências classificadas: definition/call-site/reference
+  │     dossier.go           → Composição métricas+complexidade+call graph (parse único)
+  │     gettext.go           → Extração de texto por posição
+  ├── internal/service/      → Orquestração por domínio, transporte-agnóstico (6 arquivos)
+  │     service.go           → Container Services + filtros de linguagem + limitFiles
+  │     scan.go              → ScanService: varredura multi-lang + poda genérica kinds/name
+  │     file.go              → FileAnalysisService: dossiê do arquivo + símbolos
+  │     usages.go / unused.go / calls.go → wrappers com merge multi-linguagem
+  └── internal/tools/        → Camada MCP (2 arquivos)
+        tools.go             → Tabela declarativa das 10 tools via add[In, Out] genérico
+        timing.go            → Wrapper de timeout + elapsed_ms + logging
 ```
+
+Fluxo de dependências: `tools → service → engine → lang`. Nada retorna.
 
 ## Interface Language
 
@@ -53,78 +57,62 @@ type Language interface {
 
 ### Arquivos Go — resumo
 
-| Arquivo | Linhas | Bytes | Nós | Max Nesting | Funções | Métodos |
-|---------|--------|-------|-----|-------------|---------|---------|
-| `main.go` | 88 | 2.332 | 871 | 19 | 2 | 0 |
-| `engine.go` | 169 | 4.455 | 1.724 | 24 | 4 | 8 |
-| `symbols.go` | 142 | 3.972 | 1.345 | 21 | 1 | 5 |
-| `calls.go` | 224 | 5.776 | 2.201 | 29 | 4 | 2 |
-| `search.go` | 116 | 3.091 | 948 | 26 | 0 | 2 |
-| `metrics.go` | 187 | 4.829 | 1.705 | 23 | 3 | 2 |
-| `rename.go` | 96 | 2.676 | 952 | 33 | 1 | 1 |
-| `gettext.go` | 44 | 983 | 375 | 15 | 1 | 1 |
-| `tools.go` | 463 | 18.448 | 4.954 | 29 | 1 | 15 |
-| `lang.go` | 112 | 2.689 | 1.061 | 20 | 1 | 5 |
-| **Total** | **1.641** | **49.251** | **16.136** | — | **18** | **41** |
+| Arquivo | Linhas | Nós | Max Nesting | Funções | Métodos |
+|---------|--------|-----|-------------|---------|---------|
+| `main.go` | 89 | 884 | 19 | 2 | 0 |
+| `engine.go` | 169 | 1.724 | 24 | 4 | 8 |
+| `symbols.go` | 125 | 1.166 | 21 | 1 | 4 |
+| `calls.go` | 227 | 2.263 | 29 | 4 | 3 |
+| `search.go` | 80 | 629 | 26 | 0 | 1 |
+| `metrics.go` | 196 | 1.827 | 23 | 3 | 4 |
+| `usages.go` | 151 | 1.482 | 31 | 2 | 1 |
+| `dossier.go` | 38 | 313 | 14 | 0 | 1 |
+| `gettext.go` | 44 | 375 | 15 | 1 | 1 |
+| `service/*.go` (6) | 356 | 2.924 | 24 | 6 | 6 |
+| `lang.go` | 112 | 1.061 | 20 | 1 | 5 |
+| `tools.go` | 322 | 3.106 | 29 | 12 | 0 |
+| `timing.go` | 66 | 613 | 19 | 3 | 1 |
+| **Total** | **1.975** | **18.367** | — | **39** | **35** |
 
-### Complexidade ciclomática (funções > 10)
+### Complexidade ciclomática (funções > 8)
 
 | Função | Arquivo | Complexidade | Notas |
 |--------|---------|-------------|-------|
-| `Callers` | `calls.go:132` | **14** | Maior do repo — lógica de aggregate callers |
-| `Complexity` | `metrics.go:29` | **12** | Walk + decisão de kinds |
-| `walkFiles` | `symbols.go:94` | **11** | Walk recursivo + filtros |
-| `functionRanges` | `calls.go:78` | **10** | Mapeia ranges de funções |
-| `CallGraph` | `calls.go:29` | **10** | Monta call graph |
-| `RenamePreview` | `rename.go:23` | **10** | Walk + cruzamento com definições |
-| `SymbolsText` | `symbols.go:20` | **10** | Query + formatação |
-| `UnusedSymbols` | `search.go:66` | **15** | Maior do repo — contagem + heurística |
-| `Analyze` | `metrics.go:134` | **9** | Coleta métricas |
-| `SearchName` | `search.go:28` | **9** | Busca por nome |
-
-**Maior complexidade:** `UnusedSymbols` (15) e `Callers` (14). Ambos envolvem lógica de agregação iterativa.
-
-### Call graph — funções mais chamadoras
-
-**`calls.go`** — função que mais chama outras:
-- `Callers` chama: `make`, `functionRanges`, `point`, `findFunc`, `append` (×2), `len` (×2)
-- `CallGraph` chama: `functionRanges`, `len`, `point`, `findFunc`, `appendCallee`
-
-### Métodos do engine
-
-| Método | Arquivo | Complexidade | Descrição |
-|--------|---------|-------------|-----------|
-| `New` | engine.go:48 | 1 | Construtor |
-| `Resolve` | engine.go:50 | 1 | Resolve linguagem |
-| `ListLanguages` | engine.go:54 | 1 | Lista linguagens |
-| `Parse` | engine.go:59 | 2 | Parse de arquivo |
-| `Query` | engine.go:71 | 1 | Query tree-sitter |
-| `QueryLimit` | engine.go:78 | 1 | Query com limite |
-| `QueryText` | engine.go:84 | 2 | Query com texto |
-| `parseFile` | engine.go:93 | 2 | Parse interno |
-| `runQuery` | engine.go:103 | **7** | Executa query + formata resultados |
-| `toNode` | engine.go:137 | 4 | Converte AST node para JSON |
+| `UnusedSymbols` | `search.go` | **15** | Maior do repo — contagem + heurística textual |
+| `Usages` | `usages.go` | **14** | Classificação definition/call-site/reference |
+| `Callers` | `calls.go` | **14** | Agregação de callers por arquivo |
+| `pruneGroups` | `service/scan.go` | **12** | Poda genérica kinds/name (helper genérico `[V any]`) |
+| `walkFiles` | `symbols.go` | **11** | Walk recursivo + filtros |
+| `complexityTree` | `metrics.go` | **11** | Walk + decisão de kinds |
+| `SymbolsText` | `symbols.go` | **10** | Query + formatação |
+| `functionRanges` | `calls.go` | **10** | Mapeia ranges de funções |
 
 ### Tools MCP
 
-| # | Tool | Handler | Complexidade |
-|---|------|---------|-------------|
-| 1 | `list_languages` | `listLanguages` | 1 |
-| 2 | `parse_ast_file` | `parseAST` | 4 |
-| 3 | `query_ast_file` | `queryAST` | 3 |
-| 4 | `symbols_file` | `symbols` | 3 |
-| 5 | `scan_symbols_dir` | `scanSymbols` | 3 |
-| 6 | `scan_variables_dir` | `scanVariables` | 3 |
-| 7 | `analyze_file` | `analyze` | 3 |
-| 8 | `get_text_file` | `getText` | 3 |
-| 9 | `search_name_dir` | `searchName` | 3 |
-| 10 | `complexity_file` | `complexity` | 3 |
-| 11 | `unused_symbols_dir` | `unusedSymbols` | 3 |
-| 12 | `rename_preview_dir` | `renamePreview` | 3 |
-| 13 | `call_graph_file` | `callGraph` | 3 |
-| 14 | `callers_dir` | `callers` | 3 |
+| # | Tool | Escopo | Handler (tools.go) |
+|---|------|--------|--------------------|
+| 1 | `list_languages` | meta | `handleListLanguages` |
+| 2 | `parse_ast_file` | arquivo | `handleParseAST` |
+| 3 | `query_ast_file` | arquivo | `handleQueryAST` |
+| 4 | `symbols_file` | arquivo | `handleSymbolsFile` |
+| 5 | `analyze_file` | arquivo | `handleAnalyzeFile` (dossiê: métricas+complexidade+call graph) |
+| 6 | `get_text_file` | arquivo | `handleGetText` |
+| 7 | `scan_symbols_dir` | diretório | `handleScanDir` (filtros languages[]/kinds[]/name) |
+| 8 | `unused_symbols_dir` | diretório | `handleUnused` |
+| 9 | `usages_dir` | diretório | `handleUsages` |
+| 10 | `callers_dir` | diretório | `handleCallers` |
 
-Todas usam `langFilter` (complexidade 3) para resolver o filtro de linguagem.
+Registro declarativo: `Register()` lista 10 chamadas a `add[In any, Out TimedOutput]()`, que aplica o wrapper `timed()` (timeout + elapsed_ms + log). Handlers são adapters finos input→service; toda orquestração vive em `internal/service`.
+
+### Serviços (internal/service)
+
+| Serviço | Método | Responsabilidade |
+|---------|--------|------------------|
+| `ScanService` | `Dir(ScanQuery)` | Resolve linguagens, varre cada uma, poda com `pruneGroups[V]` (genérico), aplica `limitFiles` |
+| `FileAnalysisService` | `Dossier(lang, path)` / `Symbols(...)` | Dossiê com parse único (via variantes `*Tree` do engine); símbolos do arquivo |
+| `UsagesService` | `Dir(name, dir, ...)` | Ocorrências classificadas, merge multi-linguagem |
+| `UnusedService` | `Dir(dir, ...)` | Dead code heuristic |
+| `CallsService` | `Callers(name, dir, ...)` | Quem chama o alvo, agregado |
 
 ## Dependências
 
@@ -166,13 +154,16 @@ Binários: `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`, `window
 ## Testes
 
 ```bash
-go test ./...   # 4 arquivos de teste (engine + 3 linguagens)
+go test ./...   # engine (scan, analyze, dossier, query, get_text, usages, complexity, unused, callgraph, callers)
+                # service (filtros kinds/name, poda genérica, limite, dossiê, classificação usages)
+                # linguagens (parse + símbolos go/java/python)
 go vet ./...    # gofmt limpo
 ```
 
 | Arquivo de teste | Package | Coverage |
 |------------------|---------|----------|
-| `engine_test.go` | engine | Scan, analyze, query, get_text, search, complexity, unused, rename, callgraph, callers |
+| `engine_test.go` | engine | Scan, analyze, dossier, query, get_text, include_text, complexity, unused, usages (classificação), callgraph, callers, cancelamento |
+| `service_test.go` | service | Filtro kinds, filtro name, limite, displayLang, classificação call-site/caller, dossiê, pruneGroups |
 | `go_test.go` | golang | Parse, símbolos Go |
 | `python_test.go` | python | Parse, símbolos Python |
 | `java_test.go` | java | Parse, símbolos Java |

@@ -28,17 +28,20 @@ type Callee struct {
 // using the language's call query. A call belongs to the function whose range
 // contains it. Calls outside any function are reported under "".
 func (e *Engine) CallGraph(l lang.Language, path string) ([]CallEntry, error) {
-	qs, ok := l.AuxQueries()["calls"]
-	if !ok {
-		return nil, fmt.Errorf("language %s has no call query", l.Name())
-	}
 	src, tree, err := e.parseFile(l, path)
 	if err != nil {
 		return nil, err
 	}
 	defer tree.Close()
-	root := tree.RootNode()
+	return e.callGraphTree(l, src, tree.RootNode())
+}
 
+// callGraphTree is CallGraph over an already parsed tree.
+func (e *Engine) callGraphTree(l lang.Language, src []byte, root *ts.Node) ([]CallEntry, error) {
+	qs, ok := l.AuxQueries()["calls"]
+	if !ok {
+		return nil, fmt.Errorf("language %s has no call query", l.Name())
+	}
 	funcs := functionRanges(l, root, src)
 	if len(funcs) == 0 {
 		return []CallEntry{}, nil

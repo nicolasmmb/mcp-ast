@@ -2,26 +2,20 @@
 
 Servidor [MCP](https://modelcontextprotocol.io) em Go para análise de AST de múltiplas linguagens usando [tree-sitter](https://github.com/tree-sitter/go-tree-sitter) e o [Go SDK oficial](https://github.com/modelcontextprotocol/go-sdk).
 
-Analisa arquivos e diretórios e expõe 14 tools por stdio:
+Analisa arquivos e diretórios e expõe 10 tools por stdio:
 
-| Tool | Função |
-|---|---|
-| `list_languages` | Linguagens registradas |
-| `parse_ast_file` | Árvore sintática completa de um arquivo em JSON |
-| `query_ast_file` | Queries tree-sitter customizadas em um arquivo |
-| `symbols_file` | Símbolos de um arquivo por tipo (classes, métodos, imports...) |
-| `analyze_file` | Métricas de um arquivo |
-| `get_text_file` | Código exato de um range de posições de um arquivo |
-| `scan_symbols_dir` | Símbolos de um diretório inteiro |
-| `scan_variables_dir` | Variáveis de um diretório inteiro |
-| `search_name_dir` | Busca um nome em arquivos de um diretório |
-| `complexity_file` | Complexidade ciclomática por função |
-| `unused_symbols_dir` | Símbolos declarados mas nunca referenciados |
-| `rename_preview_dir` | Ocorrências de um nome (renomeação) |
-| `call_graph_file` | Quem chama quem em um arquivo |
-| `callers_dir` | Quem chama um alvo no diretório inteiro |
-
-Toda tool devolve `elapsed_ms` (tempo de processamento da consulta em milissegundos) junto com o resultado.
+| Tool | Escopo | Função |
+|---|---|---|
+| `list_languages` | meta | Linguagens registradas |
+| `parse_ast_file` | arquivo | Árvore sintática completa de um arquivo em JSON |
+| `query_ast_file` | arquivo | Queries tree-sitter customizadas em um arquivo |
+| `symbols_file` | arquivo | Símbolos de um arquivo por tipo (classes, métodos, imports...) |
+| `analyze_file` | arquivo | Dossiê completo: métricas + complexidade ciclomática + call graph |
+| `get_text_file` | arquivo | Código exato de um range de posições de um arquivo |
+| `scan_symbols_dir` | diretório | Símbolos de um diretório, com filtros `languages[]`, `kinds[]`, `name` |
+| `unused_symbols_dir` | diretório | Símbolos declarados mas nunca referenciados (dead code) |
+| `usages_dir` | diretório | Toda ocorrência de um nome, classificada: definition / call-site / reference |
+| `callers_dir` | diretório | Quem chama um alvo, agregado por função com contagem |
 
 **Referência rápida — o que cada tool retorna:**
 
@@ -31,16 +25,14 @@ Toda tool devolve `elapsed_ms` (tempo de processamento da consulta em milissegun
 | `parse_ast_file` | `language`, `path`, `has_error: bool`, `ast: Node` |
 | `query_ast_file` | `language`, `matches: [{captures: [{name, text, start, end}]}]` |
 | `symbols_file` | `language`, `symbols: {kind: [{name, text, start, end}]}` |
-| `scan_symbols_dir` | `language`, `files: {path: {kind: [...]}}`, `errors?` |
-| `scan_variables_dir` | `language`, `variables: {path: [{name, text, start, end}]}`, `errors?` |
-| `analyze_file` | `language`, `metrics: {lines, bytes, nodes, max_nesting, kinds}` |
+| `analyze_file` | `language`, `metrics`, `complexity: [{name, kind, complexity, start, end}]`, `call_graph: [{name, callees}]` |
 | `get_text_file` | `language`, `path`, `text: string` |
-| `search_name_dir` | `total`, `matches: [{file, kind, name, line, col, text}]`, `errors?` |
-| `complexity_file` | `language`, `entries: [{name, kind, complexity, start, end}]` |
+| `scan_symbols_dir` | `language`, `files: {path: {kind: [...]}}`, `errors?` |
 | `unused_symbols_dir` | `language`, `symbols: [{file, kind, name, line, col, text}]`, `errors?` |
-| `rename_preview_dir` | `language`, `matches: [{file, line, col, text, definition: bool}]`, `errors?` |
-| `call_graph_file` | `language`, `functions: [{name, kind, callees: [{name, count}], start, end}]` |
+| `usages_dir` | `language`, `matches: [{file, line, col, text, kind, caller?}]`, `errors?` |
 | `callers_dir` | `language`, `callers: [{file, name, kind, line, col, count}]`, `errors?` |
+
+Toda tool devolve `elapsed_ms` (tempo de processamento da consulta em milissegundos) junto com o resultado.
 
 `Node` = `{type, field?, named, start: {row, col}, end: {row, col}, children?}`. Posições são 0-based.
 
@@ -51,14 +43,29 @@ mcp-ast/
 ├── cmd/ast-mcp/main.go        # entrypoint: registra linguagens + cria o servidor MCP
 ├── internal/
 │   ├── lang/lang.go           # interface Language + registry com pool de parsers
-│   ├── engine/engine.go       # parse, AST→JSON, queries, símbolos, métricas (genérico)
-│   ├── tools/tools.go         # handlers das 14 tools MCP
-│   ├── tools/timing.go        # wrapper que injeta elapsed_ms em toda tool
-│   └── languages/
-│       ├── java/java.go       # gramática Java + queries de símbolos
-│       ├── python/python.go   # gramática Python + queries de símbolos
-│       └── go/go.go           # gramática Go + queries de símbolos
+│   ├── languages/             # gramáticas + queries por linguagem (go, java, python)
+│   ├── engine/                # operações tree-sitter puras (sem noção de MCP)
+│   │   ├── engine.go          # parse, AST→JSON, queries
+│   │   ├── symbols.go         # extração de símbolos + scan de diretório
+│   │   ├── calls.go           # call graph + caller reverso
+│   │   ├── search.go          # detecção de unused symbols
+│   │   ├── metrics.go         # métricas de arquivo + complexidade ciclomática
+│   │   ├── usages.go          # ocorrências classificadas (definition/call-site/reference)
+│   │   ├── dossier.go         # composição métricas+complexidade+call graph (parse único)
+│   │   └── gettext.go         # texto por posição
+│   ├── service/               # orquestração por domínio (transporte-agnóstico)
+│   │   ├── service.go         # container Services + resolução de filtros de linguagem
+│   │   ├── scan.go            # ScanService: varredura com poda genérica kinds/name/limit
+│   │   ├── file.go            # FileAnalysisService: dossiê do arquivo + símbolos
+│   │   ├── usages.go          # UsagesService
+│   │   ├── unused.go          # UnusedService
+│   │   └── calls.go           # CallsService: callers agregados
+│   └── tools/                 # camada MCP: registro das tools + timing
+│       ├── tools.go           # tabela declarativa das 10 tools (registro genérico)
+│       └── timing.go          # wrapper que injeta elapsed_ms em toda tool
 ```
+
+Fluxo de dependências: `tools → service → engine → lang`. Nada retorna.
 
 ## Como funciona a modularidade
 
@@ -76,10 +83,10 @@ type Language interface {
 ```
 
 `AuxQueries` alimenta as tools avançadas:
-- `"identifiers"` — captura todo identificador como `@id` (usa o `rename_preview_dir`)
-- `"calls"` — captura o callee de cada call como `@callee` (usa `call_graph_file`/`callers_dir`)
+- `"identifiers"` — captura todo identificador como `@id` (usado por `usages_dir`)
+- `"calls"` — captura o callee de cada call como `@callee` (usado por `analyze_file`/`callers_dir`)
 
-Adicionar uma linguagem = 1 arquivo novo (ex. `internal/languages/python/python.go`) + 1 linha no slice do `main.go`. Engine e tools são 100% genéricos — não conhecem nenhuma gramática.
+Adicionar uma linguagem = 1 arquivo novo (ex. `internal/languages/python/python.go`) + 1 linha no slice do `main.go`. Engine, services e tools são 100% genéricos — não conhecem nenhuma gramática.
 
 ```go
 // cmd/ast-mcp/main.go
@@ -88,7 +95,7 @@ for _, l := range []lang.Language{java.Java{}, python.Python{}, golanglang.Go{}}
 }
 ```
 
-Exemplo de queries de símbolos do Java (`internal/languages/java/java.go:33`):
+Exemplo de queries de símbolos do Java (`internal/languages/java/java.go`):
 
 ```go
 "classes": `(class_declaration name: (identifier) @name) @symbol`,
@@ -99,13 +106,27 @@ Exemplo de queries de símbolos do Java (`internal/languages/java/java.go:33`):
 - `@name` captura o nome do símbolo
 - `@symbol` captura o nó inteiro (posições + texto)
 
+### Camadas: engine → service → tools
+
+- **engine** — operações tree-sitter puras. Não conhece MCP nem filtros de apresentação.
+- **service** (`internal/service/`) — orquestração por domínio: varredura multi-linguagem com poda de `kinds[]`/`name`, dossiê do arquivo (parse único), classificação de usages. Outputs têm json tags e são usados verbatim como corpo da resposta. Transporte-agnóstico: um CLI ou teste pode dirigir `service.New(engine.New(reg))` sem MCP.
+- **tools** (`internal/tools/tools.go`) — só a camada MCP. O registro é uma tabela declarativa via função genérica `add[In, Out TimedOutput]`: adicionar uma tool = 1 struct de input + 1 handler fino + 1 entrada na tabela.
+
+**Receitas de extensão:**
+
+| Para adicionar... | Passos |
+|---|---|
+| Linguagem | 1 arquivo em `internal/languages/<lang>/` + 1 item no slice do `main.go`. Zero mudança em engine/service/tools |
+| Nova análise de arquivo | função no engine (+ variante que receba árvore pronta, se composta) → método no serviço → campo no DTO |
+| Nova tool de diretório | query struct no service → handler + entrada `add()` no `Register` |
+
 ### Parser pool
 
 Parsers tree-sitter não são thread-safe e handlers MCP são concorrentes, então o registry mantém um `sync.Pool` por linguagem (`lang.Acquire`). Todo `Parser`/`Tree`/`Query`/`QueryCursor` é liberado com `Close()` (memória CGO).
 
 ### Autodetect de linguagem
 
-Nas tools que aceitam `language` opcional, a linguagem é inferida pela extensão do arquivo (`.java`, `.py`, `.go`).
+Nas tools que aceitam `language`/`languages[]` opcionais, a linguagem é inferida pela extensão do arquivo (`.java`, `.py`, `.go`).
 
 ### Timing
 
@@ -124,7 +145,7 @@ Releases são geradas automaticamente: a cada push em `main` um workflow calcula
 
 ## Como usar o MCP
 
-O servidor fala **MCP por stdio**: lê mensagens JSON-RPC da entrada padrão e responde na saída padrão. Qualquer cliente MCP (agente, editor, CLI) que o execute como processo local ganha as 14 tools automaticamente.
+O servidor fala **MCP por stdio**: lê mensagens JSON-RPC da entrada padrão e responde na saída padrão. Qualquer cliente MCP (agente, editor, CLI) que o execute como processo local ganha as 10 tools automaticamente.
 
 ### 1. Obtenha o binário
 
@@ -204,14 +225,14 @@ Sem cliente, teste o servidor por stdio (as três mensagens são o handshake `in
   | ast-mcp
 ```
 
-A resposta ao `initialize` traz `serverInfo` (name `ast-mcp`, version = a tag da release, ex.: `v0.1.3`; localmente `dev`), e o `tools/list` retorna as 14 tools.
+A resposta ao `initialize` traz `serverInfo` (name `ast-mcp`, version = a tag da release, ex.: `v0.1.3`; localmente `dev`), e o `tools/list` retorna as 10 tools.
 
 ### 4. Chame as tools
 
-Conectado, as 14 tools aparecem como ferramentas nativas do agente — peça em linguagem natural ("qual a complexidade de `src/foo.go`?") ou invoque direto. Por baixo é o método MCP `tools/call`:
+Conectado, as 10 tools aparecem como ferramentas nativas do agente — peça em linguagem natural ("qual a complexidade de `src/foo.go`?") ou invoque direto. Por baixo é o método MCP `tools/call`:
 
 ```json
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"complexity_file","arguments":{"path":"src/foo.go"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"analyze_file","arguments":{"path":"src/foo.go"}}}
 ```
 
 Cada tool — argumentos, exemplos de request/response e convenções de posição — está documentada na seção [# Tools](#tools) abaixo.
@@ -483,19 +504,23 @@ Cada símbolo tem `name`, `text` (resumo de 1 linha; corpo completo com `include
 
 ## `scan_symbols_dir`
 
-Varre um diretório recursivamente e devolve os símbolos de todos os arquivos reconhecidos, agrupados por caminho. Ignora pastas ocultas. Erros de arquivos individuais vão em `errors` em vez de abortar a varredura.
+Varre um diretório recursivamente e devolve os símbolos de todos os arquivos reconhecidos, agrupados por caminho, depois por tipo. Ignora pastas ocultas. Erros de arquivos individuais vão em `errors` em vez de abortar a varredura. É a tool de diretório mais versátil: com `kinds` substitui uma busca só de variáveis; com `name` localiza onde um símbolo é declarado no codebase inteiro.
 
 **Argumentos:**
 
 | Campo | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
 | `path` | string | sim | Diretório a varrer |
-| `language` | string | não | Restringe a uma linguagem; omitir = autodetect por arquivo |
+| `languages[]` | string[] | não | Linguagens a incluir (ex. `["go","java"]`); omitir = autodetect por arquivo |
+| `kinds[]` | string[] | não | Tipos de símbolo a retornar; omitir = todos. Válidos por linguagem: **Go**: `types`, `functions`, `methods`, `variables`, `imports`; **Java**: `classes`, `interfaces`, `enums`, `records`, `methods`, `constructors`, `fields`, `variables`, `imports`; **Python**: `classes`, `functions`, `variables`, `imports` |
+| `name` | string | não | Retorna apenas declarações cujo nome é exatamente este |
+| `include_text` | bool | não | `true` inclui o texto completo da declaração em vez do resumo de 1 linha |
+| `limit` | int | não | Máximo de arquivos no resultado (`0` = sem limite) |
 
-**Request:**
+**Request — mapa estrutural do repo:**
 
 ```json
-{"name": "scan_symbols_dir", "arguments": {"path": "./internal", "language": "go"}}
+{"name": "scan_symbols_dir", "arguments": {"path": "./internal", "languages": ["go"]}}
 ```
 
 **Response:**
@@ -514,74 +539,25 @@ Varre um diretório recursivamente e devolve os símbolos de todos os arquivos r
         { "name": "Parse", "text": "func (e *Engine) Parse(l lang.Language, path string, maxDepth int) (*Node, bool, error) {",
           "start": {"row": 70, "col": 0}, "end": {"row": 80, "col": 1} }
       ]
-    },
-    "internal/lang/lang.go": {
-      "functions": [
-        { "name": "NewRegistry", "text": "func NewRegistry() *Registry {",
-          "start": {"row": 32, "col": 0}, "end": {"row": 34, "col": 1} }
-      ]
     }
   }
 }
 ```
 
-`language` na resposta é `"auto"` quando detectado por arquivo, ou o nome informado. O exemplo acima resolveu o uso típico "pega as funções do repo inteiro" numa única chamada.
-
----
-
-## `scan_variables_dir`
-
-Varre um diretório recursivamente e devolve **apenas as variáveis** de todos os arquivos reconhecidos, agrupadas por caminho. Ignora pastas ocultas. Erros de arquivos individuais vão em `errors` em vez de abortar a varredura.
-
-O que é considerado variável por linguagem:
-
-- **Java**: variáveis locais (corpo de métodos, loops) — campos de classe ficam no kind `fields` do `symbols_file`
-- **Python**: atribuições (`x = ...`)
-- **Go**: `:=` (short var), `var` declarations e campos de struct
-
-**Argumentos:**
-
-| Campo | Tipo | Obrigatório | Descrição |
-|---|---|---|---|
-| `path` | string | sim | Diretório a varrer |
-| `language` | string | não | Restringe a uma linguagem; omitir = autodetect por arquivo |
-
-**Request:**
+**Exemplos equivalentes às tools antigas:**
 
 ```json
-{"name": "scan_variables_dir", "arguments": {"path": "./src"}}
+{"name": "scan_symbols_dir", "arguments": {"path": "./src", "kinds": ["variables"]}}
+{"name": "scan_symbols_dir", "arguments": {"path": ".", "name": "Engine"}}
 ```
 
-**Response:**
-
-```json
-{
-  "elapsed_ms": 12.5,
-  "language": "auto",
-  "variables": {
-    "src/Sample.java": [
-      { "name": "total", "text": "int total = 0;",
-        "start": {"row": 3, "col": 8}, "end": {"row": 3, "col": 22} },
-      { "name": "i", "text": "int i = 0;",
-        "start": {"row": 5, "col": 13}, "end": {"row": 5, "col": 23} }
-    ],
-    "src/demo.py": [
-      { "name": "count", "text": "count = 0",
-        "start": {"row": 2, "col": 0}, "end": {"row": 2, "col": 9} },
-      { "name": "name", "text": "name = who",
-        "start": {"row": 6, "col": 8}, "end": {"row": 6, "col": 18} }
-    ]
-  }
-}
-```
-
-Cada variável tem `name`, `text` (linha da declaração) e posições usáveis no `get_text_file`. Arquivos sem variáveis são omitidos do map.
+Arquivos que ficam sem símbolo após os filtros são omitidos do map. `language` na resposta é `"auto"` quando detectado por arquivo ou os nomes informados.
 
 ---
 
 ## `analyze_file`
 
-Métricas de um arquivo: tamanho, contagem de nós, profundidade de aninhamento, e estatísticas de linhas por tipo de símbolo.
+Dossiê completo de um arquivo em uma chamada (parse único): métricas de tamanho/nesting, estatísticas por tipo de símbolo, **complexidade ciclomática por função/método** e o **call graph** (quem chama quem, com contagem).
 
 **Argumentos:**
 
@@ -593,31 +569,37 @@ Métricas de um arquivo: tamanho, contagem de nós, profundidade de aninhamento,
 **Request:**
 
 ```json
-{"name": "analyze_file", "arguments": {"path": "internal/engine/engine.go"}}
+{"name": "analyze_file", "arguments": {"path": "internal/engine/gettext.go"}}
 ```
 
-**Response:**
+**Response (resumido):**
 
 ```json
 {
-  "elapsed_ms": 5.5,
+  "elapsed_ms": 5.0,
   "language": "go",
   "metrics": {
-    "lines": 311,
-    "bytes": 7755,
-    "nodes": 3063,
-    "max_nesting": 24,
+    "lines": 44, "bytes": 983, "nodes": 375, "max_nesting": 15,
     "kinds": {
-      "functions": { "count": 6, "avg_lines": 8.67, "max_lines": 18 },
-      "methods":   { "count": 9, "avg_lines": 18.33, "max_lines": 39 },
-      "imports":   { "count": 1, "avg_lines": 12, "max_lines": 12 },
-      "types":     { "count": 8, "avg_lines": 5.25, "max_lines": 8 }
+      "methods":   { "count": 1, "avg_lines": 15, "max_lines": 15 },
+      "variables": { "count": 7, "avg_lines": 1, "max_lines": 1 }
     }
-  }
+  },
+  "complexity": [
+    { "name": "byteOffset", "kind": "functions", "complexity": 4,
+      "start": {"row": 29, "col": 0}, "end": {"row": 42, "col": 1} },
+    { "name": "GetText", "kind": "methods", "complexity": 4,
+      "start": {"row": 12, "col": 0}, "end": {"row": 26, "col": 1} }
+  ],
+  "call_graph": [
+    { "name": "GetText", "kind": "methods", "callees": [
+        { "name": "byteOffset", "count": 2 }, { "name": "len", "count": 2 } ],
+      "start": {"row": 12, "col": 0}, "end": {"row": 26, "col": 1} }
+  ]
 }
 ```
 
-`lines` conta `\n` + 1 (arquivo `a.go\nb\n` = 3 linhas). `max_nesting` é a profundidade máxima da árvore — proxy útil de complexidade.
+Regra da complexidade ciclomática: cada `if`/`for`/`while`/`switch`/`case`/ternário/`catch` soma 1, e cada `&&`/`||` soma 1. Score > 10 é bom candidato a refactor — use as posições `start`/`end` no `get_text_file` para ler o código da função problemática. `lines` conta `\n` + 1 (arquivo `a.go\nb\n` = 3 linhas). `max_nesting` é a profundidade máxima da árvore — proxy útil de complexidade.
 
 ---
 
@@ -662,82 +644,6 @@ Devolve o texto exato de um range de posições (0-based), como as que qualquer 
 
 ---
 
-## `search_name_dir`
-
-Busca um símbolo **por nome** em todos os arquivos de um diretório, usando o AST (as symbol queries do tree-sitter por linguagem). Retorna **apenas declarações** — classes, funções, variáveis, etc. — com o `kind`, posição e texto, ignorando usos, comentários e strings.
-
-**Argumentos:**
-
-| Campo | Tipo | Obrigatório | Descrição |
-|---|---|---|---|
-| `name` | string | sim | Nome do símbolo a buscar (igualdade exata) |
-| `path` | string | sim | Diretório para buscar recursivamente |
-| `language` | string | não | Filtrar por linguagem (ex. `go`, `java`). Omitir para buscar em todos os arquivos reconhecidos |
-| `limit` | int | não | Máximo de matches (0 = sem limite) |
-
-**Request:**
-
-```json
-{"name": "search_name_dir", "arguments": {"name": "Engine", "path": "."}}
-```
-
-**Response:**
-
-```json
-{
-  "elapsed_ms": 37.2,
-  "total": 1,
-  "matches": [
-    {
-      "file": "internal/engine/engine.go",
-      "kind": "types",
-      "name": "Engine",
-      "line": 48,
-      "col": 5,
-      "text": "Engine struct {"
-    }
-  ]
-}
-```
-
-Cada match tem `file` (caminho), `kind` (tipo de símbolo: `classes`, `functions`, `types`, `variables`...), `name`, `line`/`col` (posição 0-based) e `text` (resumo de 1 linha do símbolo). Por ser AST-aware, só acha **definições** — usar a busca para achar onde o nome aparece como referência não funciona; para isso use `query_ast_file` ou a busca textual.
-
----
-
-## `complexity_file`
-
-Complexidade ciclomática (`1 + pontos de decisão`) de cada função e método de um arquivo. Pontos de decisão: `if`, loops (`for`/`while`/`do`), `switch`/`case`, ternário, `catch`, e operadores lógicos `&&`/`||` — cada um soma 1.
-
-**Argumentos:**
-
-| Campo | Tipo | Obrigatório | Descrição |
-|---|---|---|---|
-| `path` | string | sim | Arquivo a analisar |
-| `language` | string | não | Omitir para autodetect |
-
-**Request:**
-
-```json
-{"name": "complexity_file", "arguments": {"path": "internal/engine/engine.go"}}
-```
-
-**Response:**
-
-```json
-{
-  "elapsed_ms": 3.1,
-  "language": "go",
-  "entries": [
-    {"name": "hasExt", "kind": "functions", "complexity": 3, "start": {"row": 182, "col": 0}, "end": {"row": 189, "col": 1}},
-    {"name": "complexityOf", "kind": "functions", "complexity": 5, "start": {"row": 268, "col": 0}, "end": {"row": 291, "col": 1}}
-  ]
-}
-```
-
-Regra da complexidade ciclomática: cada `if`/`for`/`while`/`switch`/`case`/ternário/`catch` soma 1, e cada `&&`/`||` soma 1 (na mesma linha, `a && b` = 2 pontos). O `binary_expression` só conta quando o operador é lógico — aritmética não soma. `complexity > 10` é um bom candidato a refactor.
-
----
-
 ## `unused_symbols_dir`
 
 Símbolos **declarados mas nunca referenciados** (dead code) em um diretório. Heurística: um símbolo cujo nome aparece **exatamente uma vez** em todos os arquivos reconhecidos é considerado não usado — a única ocorrência é a própria declaração.
@@ -747,7 +653,7 @@ Símbolos **declarados mas nunca referenciados** (dead code) em um diretório. H
 | Campo | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
 | `path` | string | sim | Diretório para buscar recursivamente |
-| `language` | string | não | Filtrar por linguagem. Omitir para auto |
+| `languages[]` | string[] | não | Linguagens a incluir; omitir = autodetect por arquivo |
 | `limit` | int | não | Máximo de resultados (0 = sem limite) |
 
 **Request:**
@@ -768,84 +674,61 @@ Símbolos **declarados mas nunca referenciados** (dead code) em um diretório. H
 }
 ```
 
+Antes de deletar um suspeito, confirme com `callers_dir` (resposta vazia = ninguém chama) e lembre de símbolos exportados/públicos que podem ser consumidos fora do diretório varrido.
+
 **Limitações da heurística** (`ponytail:` trade-off): contagem textual de ocorrências, não análise de referências semântica. Comentários e strings contam como uso (nunca marca falso-unused, mas pode **deixar passar** um símbolo de fato não usado que aparece num comentário). O resultado é por diretório: um símbolo usado **fora** do diretório varrido aparece como unused.
 
 ---
 
-## `rename_preview_dir`
+## `usages_dir`
 
-Acha **todas as ocorrências** de um nome de símbolo em um diretório (via query de identificadores da linguagem), marcando quais são **definições**. Use antes de renomear para ver todos os pontos a editar.
+Acha **todas as ocorrências** de um nome de símbolo em um diretório (via query de identificadores da linguagem) e classifica cada uma:
+
+- **`definition`** — o ponto de declaração (cruzado com as symbol queries da linguagem)
+- **`call-site`** — o nome é o callee de uma invocação; traz `caller` = função/método contenedor da chamada
+- **`reference`** — qualquer outro uso
+
+Use antes de renomear ou deletar para enumerar todos os pontos de edição. Para contagem agregada "quem chama X" use `callers_dir`; para só declarações use `scan_symbols_dir` com `name`.
 
 **Argumentos:**
 
 | Campo | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
-| `name` | string | sim | Nome do símbolo a renomear |
+| `name` | string | sim | Nome do símbolo a rastrear |
 | `path` | string | sim | Diretório para buscar recursivamente |
-| `language` | string | não | Filtrar por linguagem. Omitir para auto |
+| `languages[]` | string[] | não | Linguagens a incluir; omitir = autodetect por arquivo |
 | `limit` | int | não | Máximo de matches (0 = sem limite) |
 
 **Request:**
 
 ```json
-{"name": "rename_preview_dir", "arguments": {"name": "Analyze", "path": "internal/engine"}}
+{"name": "usages_dir", "arguments": {"name": "appendCallee", "path": "internal/engine"}}
 ```
 
 **Response:**
 
 ```json
 {
-  "elapsed_ms": 2.1,
+  "elapsed_ms": 47.5,
   "language": "auto",
   "matches": [
-    {"file": "internal/engine/engine.go", "line": 335, "col": 13, "text": "func (e *Engine) Analyze(l lang.Language, ...)", "definition": true},
-    {"file": "internal/engine/engine_test.go", "line": 50, "col": 3, "text": "eng.Analyze(...)", "definition": false}
+    { "file": "internal/engine/calls.go", "line": 75, "col": 23,
+      "kind": "call-site", "caller": "callGraphTree",
+      "text": "appendCallee(funcs[idx].Callees, callee)" },
+    { "file": "internal/engine/calls.go", "line": 218, "col": 5,
+      "kind": "definition",
+      "text": "func appendCallee(callees []Callee, name string) []Callee {" }
   ]
 }
 ```
 
-`definition: true` marca o ponto de declaração (cruzado com as symbol queries da linguagem); os demais são usos. `text` é a linha do pai do identificador (contexto do match). Renomear envolve editar todos os matches com `definition` e todos os usos que você quiser afetar.
-
----
-
-## `call_graph_file`
-
-Mapeia cada função e método de um arquivo para os **callees** que ela invoca, com contagem de chamadas. Um call pertence à função cujo range o contém.
-
-**Argumentos:**
-
-| Campo | Tipo | Obrigatório | Descrição |
-|---|---|---|---|
-| `path` | string | sim | Arquivo a analisar |
-| `language` | string | não | Omitir para autodetect |
-
-**Request:**
-
-```json
-{"name": "call_graph_file", "arguments": {"path": "internal/engine/engine.go"}}
-```
-
-**Response:**
-
-```json
-{
-  "elapsed_ms": 1.8,
-  "language": "go",
-  "functions": [
-    {"name": "complexityOf", "kind": "functions", "callees": [
-      {"name": "hasLogicalOp", "count": 1}, {"name": "walk", "count": 2}
-    ], "start": {"row": 268, "col": 0}, "end": {"row": 291, "col": 1}}
-  ]
-}
-```
-
-Cada entrada tem `name`, `kind` (functions/methods/constructors), `callees` (nome + `count` de invocações) e o range do símbolo. Útil para entender dependências internas de um arquivo e identificar funções-mãe com muitas chamadas.
+`text` é a linha do pai do identificador (contexto do match). Um renome envolve editar todas as ocorrências retornadas: a(s) `definition`, os `call-site` e os `reference`.
 
 ---
 
 ## `callers_dir`
 
-O reverso do `call_graph_file`: dado um **nome alvo**, acha todas as funções/métodos que o chamam em um diretório, agregando os call sites por função chamadora.
+Dado um **nome alvo**, acha todas as funções/métodos que o chamam em um diretório, agregando os call sites por função chamadora com contagem exata. Responde "quem depende disso?" — a pergunta-chave antes de mudar ou deletar uma função.
 
 **Argumentos:**
 
@@ -853,7 +736,7 @@ O reverso do `call_graph_file`: dado um **nome alvo**, acha todas as funções/m
 |---|---|---|---|
 | `name` | string | sim | Nome da função/método alvo |
 | `path` | string | sim | Diretório para buscar recursivamente |
-| `language` | string | não | Filtrar por linguagem. Omitir para auto |
+| `languages[]` | string[] | não | Linguagens a incluir; omitir = autodetect por arquivo |
 | `limit` | int | não | Máximo de resultados (0 = sem limite) |
 
 **Request:**
@@ -874,7 +757,56 @@ O reverso do `call_graph_file`: dado um **nome alvo**, acha todas as funções/m
 }
 ```
 
-Cada entrada é uma função chamadora com `file`, `name`, `kind`, posição do símbolo e `count` (quantas vezes chama o alvo). Mesma cobertura do `call_graph_file`: chamadas de método via `selector` (`obj.foo()`) são capturadas pelo nome do campo; o `count` agrega múltiplos call sites da mesma função.
+Cada entrada é uma função chamadora com `file`, `name`, `kind`, posição do símbolo e `count` (quantas vezes chama o alvo). Chamadas de método via `selector` (`obj.foo()`) são capturadas pelo nome do campo; o `count` agrega múltiplos call sites da mesma função. O que uma função **chama** (direção inversa) está no `call_graph` do `analyze_file`.
+
+---
+
+# Receitas de composição
+
+As tools foram desenhadas para combinar: as de diretório respondem "onde/quem", as de arquivo respondem "como está", e posições fluem entre elas via `get_text_file`. Padrões que cobrem quase tudo:
+
+**Onboarding num repo novo**
+1. `list_languages` → descubra o que há
+2. `scan_symbols_dir(path, languages: [...])` → mapa estrutural completo em uma chamada
+3. `analyze_file` nos arquivos maiores → complexidade + fluxo interno
+4. `get_text_file` nos trechos-chave
+
+**Impacto antes de mudar uma função**
+1. `callers_dir(name)` → quem depende dela e com que frequência
+2. `usages_dir(name)` → todas as linhas onde aparece
+3. `get_text_file` nos contextos relevantes
+
+**Renomear um símbolo com segurança**
+1. `usages_dir(name)` → lista completa de edição: definition + reference + call-site
+2. Edite cada ponto; re rode `usages_dir` para conferir zero ocorrências do nome velho
+
+**Caçar dead code**
+1. `unused_symbols_dir(path)` → suspeitos
+2. `callers_dir(name)` por suspeito → resposta vazia confirma
+3. `get_text_file` na declaração antes de deletar
+
+**Refactor de hotspot de complexidade**
+1. `analyze_file` no arquivo suspeito → pegue a maior `complexity` (já vem com `start`/`end`)
+2. `get_text_file` desse range → leia a função inteira sem carregar o arquivo
+
+# Guia para agentes (LLM)
+
+Regras operacionais para usar bem este servidor:
+
+- **Comece largo, depois estreite**: `scan_symbols_dir` com filtros `kinds[]`/`name` substitui grep textual para localizar declarações — é AST-aware (ignora comentários/strings) e devolve posições.
+- **Nunca leia um arquivo inteiro para ver uma função**: qualquer output traz `start`/`end`; passe-os ao `get_text_file`.
+- **`include_text` só quando precisar do corpo**; o default mantém outputs pequenos.
+- **Sempre rode `usages_dir` + `callers_dir` antes de renomear ou deletar.**
+- **Uma pergunta por tool**: dossiê de arquivo → `analyze_file`; impacto de símbolo → `callers_dir`/`usages_dir`; extração sob medida → `query_ast_file`; navegação da árvore → `parse_ast_file` (com `max_depth`).
+
+Snippet para o `AGENTS.md`/`CLAUDE.md` dos projetos que consomem este MCP:
+
+```markdown
+## AST analysis (ast-mcp)
+- Structural overview first: scan_symbols_dir with languages+kinds before exploring manually.
+- Before ANY rename/delete: usages_dir(name) for edit points, callers_dir(name) for impact.
+- Read exact code ranges with get_text_file using positions from tool outputs — don't cat whole files.
+```
 
 ---
 
@@ -887,6 +819,6 @@ Cada entrada é uma função chamadora com `file`, `name`, `kind`, posição do 
 # Testes
 
 ```bash
-go test ./...   # parse + símbolos por linguagem; engine (scan, analyze, query, get_text, include_text, search, complexity, unused, rename, callgraph, callers)
+go test ./...   # parse + símbolos por linguagem; engine (scan, analyze, dossier, query, get_text, usages, complexity, unused, callgraph, callers); service (filtros kinds/name, poda, dossiê)
 go vet ./...    # gofmt limpo
 ```
