@@ -10,6 +10,50 @@ import (
 	"mcp-ast/internal/lang"
 )
 
+// skipDirNames are directory basenames skipped during recursive walks.
+// Hidden directories (prefix ".") are also skipped, except the walk root.
+var skipDirNames = map[string]struct{}{
+	"node_modules": {},
+	"vendor":       {},
+	"target":       {},
+	"dist":         {},
+	"build":        {},
+	"out":          {},
+	"bin":          {},
+	"__pycache__":  {},
+	".venv":        {},
+	"venv":         {},
+	"env":          {},
+	".tox":         {},
+	".mypy_cache":  {},
+	".pytest_cache": {},
+	".next":        {},
+	".nuxt":        {},
+	".svelte-kit":  {},
+	"coverage":     {},
+	".turbo":       {},
+	".cache":       {},
+	"Pods":         {},
+	"Carthage":     {},
+	".gradle":      {},
+	".idea":        {},
+	".vscode":      {},
+}
+
+// shouldSkipDir reports whether a directory should be skipped during walks.
+// The walk root is never skipped. Hidden directories and known dependency/
+// build output trees are skipped.
+func shouldSkipDir(root, path string, name string) bool {
+	if path == root {
+		return false
+	}
+	if strings.HasPrefix(name, ".") {
+		return true
+	}
+	_, ok := skipDirNames[name]
+	return ok
+}
+
 // Symbols runs the language's built-in symbol queries and returns the
 // results grouped by kind (classes, methods, fields, imports, ...).
 func (e *Engine) Symbols(l lang.Language, path string) (map[string][]Symbol, error) {
@@ -72,7 +116,8 @@ func (e *Engine) ScanSymbols(ctx context.Context, dir string, filter lang.Langua
 }
 
 // walkFiles visits every source file under dir that the language filter (or
-// auto-detection) accepts, skipping hidden directories and honoring ctx.
+// auto-detection) accepts, skipping hidden directories, common dependency and
+// build-output trees, and honoring ctx.
 // Errors from fn are collected per-file in errs and never abort the walk;
 // walk-level errors (e.g. ctx cancellation) are returned.
 func (e *Engine) walkFiles(ctx context.Context, dir string, filter lang.Language, fn func(path string, l lang.Language) error) (map[string]string, error) {
@@ -85,7 +130,7 @@ func (e *Engine) walkFiles(ctx context.Context, dir string, filter lang.Language
 			return ctx.Err()
 		}
 		if d.IsDir() {
-			if path != dir && strings.HasPrefix(d.Name(), ".") {
+			if shouldSkipDir(dir, path, d.Name()) {
 				return fs.SkipDir
 			}
 			return nil
