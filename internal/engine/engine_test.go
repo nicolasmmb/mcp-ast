@@ -444,3 +444,100 @@ func TestScanCancelled(t *testing.T) {
 		t.Fatalf("want context.Canceled, got %v", err)
 	}
 }
+
+func TestWalkFilesSkipsHeavyDirs(t *testing.T) {
+	dir := t.TempDir()
+
+	// Source under the root should be scanned.
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n\nfunc Main() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	heavy := []string{"node_modules", "vendor", "target", "dist", "build", "__pycache__", ".venv", "venv"}
+	for _, name := range heavy {
+		sub := filepath.Join(dir, name)
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(sub, "ignored.go"), []byte("package ignored\n\nfunc ShouldNotAppear() {}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Nested heavy dir under a normal package must also be skipped.
+	pkg := filepath.Join(dir, "pkg")
+	if err := os.MkdirAll(filepath.Join(pkg, "vendor"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "lib.go"), []byte("package pkg\n\nfunc Lib() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "vendor", "dep.go"), []byte("package dep\n\nfunc Dep() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	reg := lang.NewRegistry()
+	if err := reg.Register(golanglang.Go{}); err != nil {
+		t.Fatal(err)
+	}
+	eng := New(reg)
+
+	scanned, errs, err := eng.ScanSymbols(context.Background(), dir, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(errs) != 0 {
+		t.Fatalf("unexpected scan errors: %v", errs)
+	}
+	if len(scanned) != 2 {
+		t.Fatalf("want 2 source files (main.go, pkg/lib.go), got %d: %v", len(scanned), keysOf(scanned))
+	}
+	for path := range scanned {
+		base := filepath.Base(filepath.Dir(path))
+		if _, heavy := skipDirNames[base]; heavy || stringsHasHeavyParent(path) {
+			t.Fatalf("scanned file inside skipped dir: %s", path)
+		}
+	}
+}
+
+func keysOf[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+func stringsHasHeavyParent(path string) bool {
+	parts := stringsSplitPath(path)
+	for _, p := range parts {
+		if _, ok := skipDirNames[p]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func stringsSplitPath(path string) []string {
+	var parts []string
+	for _, p := range filepath.SplitList(path) {
+		_ = p
+	}
+	// Split on OS separator without importing strings solely for this helper
+	// in a way that would require another import change in older tests.
+	cur := path
+	for {
+		dir, file := filepath.Split(cur)
+		if file != "" {
+			parts = append(parts, file)
+		}
+		if dir == "" || dir == cur {
+			break
+		}
+		cur = filepath.Clean(dir)
+		if cur == "." || cur == string(filepath.Separator) {
+			break
+		}
+	}
+	return parts
+}
