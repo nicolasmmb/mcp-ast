@@ -28,8 +28,26 @@ type Language interface {
 }
 
 type entry struct {
-	impl Language
-	pool sync.Pool
+	impl    Language
+	pool    sync.Pool
+	queries map[string]*CompiledQuery
+}
+
+type CompiledQuery struct {
+	Q     *ts.Query
+	Names []string
+}
+
+func SymbolKey(kind string) string { return "symbol:" + kind }
+
+func AuxKey(kind string) string { return "aux:" + kind }
+
+func compileQuery(l Language, key, src string) (*CompiledQuery, error) {
+	q, qerr := ts.NewQuery(l.Language(), src)
+	if qerr != nil {
+		return nil, fmt.Errorf("lang %s query %q: %s", l.Name(), key, qerr.Message)
+	}
+	return &CompiledQuery{Q: q, Names: q.CaptureNames()}, nil
 }
 
 type Registry struct {
@@ -47,11 +65,36 @@ func (r *Registry) Register(l Language) error {
 	if err := p.SetLanguage(l.Language()); err != nil {
 		return fmt.Errorf("lang %s: %w", l.Name(), err)
 	}
-	e := &entry{impl: l}
+	e := &entry{impl: l, queries: make(map[string]*CompiledQuery)}
+	for kind, qs := range l.SymbolQueries() {
+		cq, err := compileQuery(l, SymbolKey(kind), qs)
+		if err != nil {
+			return err
+		}
+		e.queries[SymbolKey(kind)] = cq
+	}
+	for kind, qs := range l.AuxQueries() {
+		cq, err := compileQuery(l, AuxKey(kind), qs)
+		if err != nil {
+			return err
+		}
+		e.queries[AuxKey(kind)] = cq
+	}
 	e.pool.New = func() any {
 		p := ts.NewParser()
 		if err := p.SetLanguage(l.Language()); err != nil {
 			panic(fmt.Sprintf("lang %s: %v", l.Name(), err))
+		}
+
+		func (r *Registry) Compiled(l Language, key string) (*CompiledQuery, bool) {
+			r.mu.RLock()
+			defer r.mu.RUnlock()
+			e, ok := r.langs[l.Name()]
+			if !ok {
+				return nil, false
+			}
+			cq, ok := e.queries[key]
+			return cq, ok
 		}
 		return p
 	}
