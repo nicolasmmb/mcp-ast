@@ -19,15 +19,16 @@ type SearchMatch struct {
 	Kind string `json:"kind"`
 	Name string `json:"name"`
 	Line int    `json:"line"`
-	Col  int    `json:"col"`
-	Text string `json:"text"`
+	Col  int    `json:"col,omitempty"`
+	Text string `json:"text,omitempty"`
 }
 
 // UnusedSymbols finds symbols declared but never referenced. Heuristic: a
 // symbol whose name appears exactly once across the whole tree of recognized
 // files is unused (the single occurrence is its own declaration). Comments and
 // strings count as references, so this never flags a truly-referenced symbol.
-// limit caps results (0 = all).
+// limit caps results (0 = all). Text is omitted from matches (use symbols_file
+// / get_text_file when the body is needed).
 func (e *Engine) UnusedSymbols(ctx context.Context, dir string, filter lang.Language, limit int) (*SearchResult, error) {
 	files, errs, err := e.ScanSymbols(ctx, dir, filter, false)
 	if err != nil {
@@ -43,6 +44,8 @@ func (e *Engine) UnusedSymbols(ctx context.Context, dir string, filter lang.Lang
 		if counts[name] != 1 {
 			continue
 		}
+		// Drop body text by default — name+location is enough to act.
+		d.Text = ""
 		result.Matches = append(result.Matches, d)
 		result.Total++
 		if limit > 0 && result.Total >= limit {

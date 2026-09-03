@@ -10,11 +10,12 @@ import (
 )
 
 // UsageMatch is one occurrence of a symbol name, classified by role.
+// Text and Col are omitted from JSON when empty/zero to save tokens.
 type UsageMatch struct {
 	File   string `json:"file"`
 	Line   int    `json:"line"`
-	Col    int    `json:"col"`
-	Text   string `json:"text"`
+	Col    int    `json:"col,omitempty"`
+	Text   string `json:"text,omitempty"`
 	Kind   string `json:"kind"`             // "definition", "reference" or "call-site"
 	Caller string `json:"caller,omitempty"` // function containing the call (call-sites only)
 }
@@ -24,8 +25,13 @@ type UsageMatch struct {
 // "definition" is a declaration site, "call-site" is the callee of an
 // invocation and carries the enclosing function in Caller, anything else is a
 // "reference". limit caps returned matches (0 = all); matching files are fully
-// parsed even past the limit.
+// parsed even past the limit. includeText adds a one-line parent snippet.
 func (e *Engine) Usages(ctx context.Context, dir, name string, filter lang.Language, limit int) ([]UsageMatch, map[string]string, error) {
+	return e.UsagesOpts(ctx, dir, name, filter, limit, false)
+}
+
+// UsagesOpts is Usages with explicit includeText.
+func (e *Engine) UsagesOpts(ctx context.Context, dir, name string, filter lang.Language, limit int, includeText bool) ([]UsageMatch, map[string]string, error) {
 	matches := []UsageMatch{}
 	errs, err := e.walkFiles(ctx, dir, filter, func(path string, l lang.Language) error {
 		qs, ok := l.AuxQueries()["identifiers"]
@@ -58,7 +64,9 @@ func (e *Engine) Usages(ctx context.Context, dir, name string, filter lang.Langu
 					File: path,
 					Line: start.Row + 1,
 					Col:  start.Col,
-					Text: firstLine(cap.Node.Parent().Utf8Text(src)),
+				}
+				if includeText {
+					u.Text = firstLine(cap.Node.Parent().Utf8Text(src))
 				}
 				switch {
 				case defPos[start]:

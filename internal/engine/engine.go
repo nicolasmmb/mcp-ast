@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -10,15 +11,40 @@ import (
 	"mcp-ast/internal/lang"
 )
 
+// Point is a 0-based source position. JSON form is a compact array [row, col]
+// instead of an object, which roughly halves tokens per position in large payloads.
 type Point struct {
 	Row int `json:"row"`
 	Col int `json:"col"`
 }
 
+// MarshalJSON encodes Point as [row,col].
+func (p Point) MarshalJSON() ([]byte, error) {
+	return []byte(fmt.Sprintf("[%d,%d]", p.Row, p.Col)), nil
+}
+
+// UnmarshalJSON accepts [row,col] or legacy {"row":n,"col":n}.
+func (p *Point) UnmarshalJSON(data []byte) error {
+	var arr [2]int
+	if err := json.Unmarshal(data, &arr); err == nil {
+		p.Row, p.Col = arr[0], arr[1]
+		return nil
+	}
+	var obj struct {
+		Row int `json:"row"`
+		Col int `json:"col"`
+	}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return fmt.Errorf("point: want [row,col] or {row,col}: %w", err)
+	}
+	p.Row, p.Col = obj.Row, obj.Col
+	return nil
+}
+
 type Node struct {
 	Type     string  `json:"type"`
 	Field    string  `json:"field,omitempty"`
-	Named    bool    `json:"named"`
+	Named    bool    `json:"named,omitempty"`
 	Start    Point   `json:"start"`
 	End      Point   `json:"end"`
 	Children []*Node `json:"children,omitempty"`
@@ -26,7 +52,7 @@ type Node struct {
 
 type Capture struct {
 	Name  string `json:"name"`
-	Text  string `json:"text"`
+	Text  string `json:"text,omitempty"`
 	Start Point  `json:"start"`
 	End   Point  `json:"end"`
 }
@@ -37,7 +63,7 @@ type Match struct {
 
 type Symbol struct {
 	Name  string `json:"name"`
-	Text  string `json:"text"`
+	Text  string `json:"text,omitempty"`
 	Start Point  `json:"start"`
 	End   Point  `json:"end"`
 }
@@ -55,16 +81,22 @@ func (e *Engine) Resolve(name, path string) (lang.Language, error) {
 func (e *Engine) ListLanguages() []string { return e.reg.List() }
 
 // Parse reads the file, parses it and converts the tree to a generic JSON
-// node. maxDepth truncates the tree (0 = unlimited). Returns whether the tree
-// contains ERROR nodes.
+// node. maxDepth truncates the tree (0 = unlimited). namedOnly drops
+// anonymous/punctuation nodes (recommended for token-efficient output).
+// Returns whether the tree contains ERROR nodes.
 func (e *Engine) Parse(l lang.Language, path string, maxDepth int) (*Node, bool, error) {
+	return e.ParseOpts(l, path, maxDepth, true)
+}
+
+// ParseOpts is Parse with explicit namedOnly control.
+func (e *Engine) ParseOpts(l lang.Language, path string, maxDepth int, namedOnly bool) (*Node, bool, error) {
 	_, tree, err := e.parseFile(l, path)
 	if err != nil {
 		return nil, false, err
 	}
 	defer tree.Close()
 	root := tree.RootNode()
-	return toNode(root, maxDepth, 0), root.HasError(), nil
+	return toNode(root, maxDepth, 0, namedOnly), root.HasError(), nil
 }
 
 // Query runs a tree-sitter query over the file and returns one Match per
@@ -135,7 +167,7 @@ func (e *Engine) runQuery(l lang.Language, src []byte, root *ts.Node, querySrc s
 	return matches, nil
 }
 
-func toNode(n *ts.Node, maxDepth, depth int) *Node {
+func toNode(n *ts.Node, maxDepth, depth int, namedOnly bool) *Node {
 	nd := &Node{
 		Type:  n.Kind(),
 		Named: n.IsNamed(),
@@ -147,7 +179,10 @@ func toNode(n *ts.Node, maxDepth, depth int) *Node {
 	}
 	for i := uint(0); i < n.ChildCount(); i++ {
 		c := n.Child(i)
-		cn := toNode(c, maxDepth, depth+1)
+		if namedOnly && !c.IsNamed() {
+			continue
+		}
+		cn := toNode(c, maxDepth, depth+1, namedOnly)
 		cn.Field = n.FieldNameForChild(uint32(i))
 		nd.Children = append(nd.Children, cn)
 	}
@@ -161,8 +196,8 @@ func firstLine(s string) string {
 		s = s[:i]
 	}
 	s = strings.Join(strings.Fields(s), " ")
-	if len(s) > 200 {
-		s = s[:197] + "..."
+	if len(s) > 120 {
+		s = s[:117] + "..."
 	}
 	return s
 }
