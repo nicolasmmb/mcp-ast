@@ -25,7 +25,7 @@ func (CSharp) SymbolQueries() map[string]string {
 		"enums":      `(enum_declaration name: (identifier) @name) @symbol`,
 		"methods":    `(method_declaration name: (identifier) @name) @symbol`,
 		"properties": `(property_declaration name: (identifier) @name) @symbol`,
-		"fields":     `(field_declaration name: (identifier) @name) @symbol`,
+		"fields":     `(field_declaration declaration: (variable_declaration (variable_declarator name: (identifier) @name))) @symbol`,
 		"constructors": `(constructor_declaration name: (identifier) @name) @symbol`,
 		"imports":    `(using_directive) @symbol`,
 		"namespaces": `(namespace_declaration name: [(identifier) (qualified_name)] @name) @symbol`,
@@ -51,7 +51,10 @@ func (CSharp) DecisionKinds() []string {
 func (CSharp) AuxQueries() map[string]string {
 	return map[string]string{
 		"identifiers": `[(identifier) (qualified_name)] @id`,
-		"calls":       `(invocation_expression function: [(identifier) (member_access_expression (identifier))] @callee)`,
+		"calls": `[
+			(invocation_expression function: (identifier) @callee)
+			(invocation_expression function: (member_access_expression name: (identifier) @callee))
+		]`,
 	}
 }
 

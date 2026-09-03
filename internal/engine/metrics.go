@@ -41,7 +41,7 @@ func (e *Engine) complexityTree(l lang.Language, src []byte, root *ts.Node) ([]C
 	decisions := buildDecisionSet(l)
 	var out []ComplexityEntry
 	for _, kind := range []string{"functions", "methods", "constructors"} {
-		entries := processFuncKind(l, kind, root, src, decisions)
+		entries := e.processFuncKind(l, kind, root, src, decisions)
 		out = append(out, entries...)
 	}
 	return out, nil
@@ -57,23 +57,21 @@ func buildDecisionSet(l lang.Language) map[string]bool {
 }
 
 // processFuncKind queries one symbol kind and returns complexity entries.
-func processFuncKind(l lang.Language, kind string, root *ts.Node, src []byte, decisions map[string]bool) []ComplexityEntry {
-	qs, ok := l.SymbolQueries()[kind]
+func (e *Engine) processFuncKind(l lang.Language, kind string, root *ts.Node, src []byte, decisions map[string]bool) []ComplexityEntry {
+	_, ok := l.SymbolQueries()[kind]
 	if !ok {
 		return nil
 	}
-	q, qerr := ts.NewQuery(l.Language(), qs)
-	if qerr != nil {
+	cq, ok := e.reg.Compiled(l, lang.SymbolKey(kind))
+	if !ok {
 		return nil
 	}
-	defer q.Close()
 	c := ts.NewQueryCursor()
 	defer c.Close()
-	names := q.CaptureNames()
-	it := c.Matches(q, root, src)
+	it := c.Matches(cq.Q, root, src)
 	var out []ComplexityEntry
 	for m := it.Next(); m != nil; m = it.Next() {
-		name, symNode := extractSymbolMatch(m, names, src)
+		name, symNode := extractSymbolMatch(m, cq.Names, src)
 		if symNode == nil {
 			continue
 		}
@@ -170,8 +168,8 @@ func (e *Engine) analyzeTree(l lang.Language, src []byte, root *ts.Node) (*Metri
 		Kinds: make(map[string]KindMetric),
 	}
 	m.Nodes, m.MaxNesting = countNodes(root)
-	for kind, qs := range l.SymbolQueries() {
-		matches, err := e.runQuery(l, src, root, qs, 0, false)
+	for kind := range l.SymbolQueries() {
+		matches, err := e.runCompiledQuery(l, src, root, lang.SymbolKey(kind), 0, false)
 		if err != nil {
 			return nil, fmt.Errorf("symbol query %q: %w", kind, err)
 		}
