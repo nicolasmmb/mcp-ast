@@ -38,14 +38,15 @@ func (Go) DecisionKinds() []string {
 		"type_case",
 		"communication_case",
 		"default_case",
-		"binary_expression", // only counts when the operator is && or ||
+		"binary_expression",
 	}
 }
 
 func (Go) AuxQueries() map[string]string {
 	return map[string]string{
 		"identifiers": `[(identifier) (type_identifier) (field_identifier)] @id`,
-		"calls":       `(call_expression function: [(identifier) (field_identifier)] @callee)`,
+		"calls": `(call_expression function: (identifier) @callee)
+(call_expression function: (selector_expression field: (field_identifier) @callee))`,
 	}
 }
 

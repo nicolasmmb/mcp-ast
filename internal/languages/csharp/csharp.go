@@ -19,17 +19,17 @@ func (CSharp) Language() *ts.Language {
 
 func (CSharp) SymbolQueries() map[string]string {
 	return map[string]string{
-		"classes":    `(class_declaration name: (identifier) @name) @symbol`,
-		"interfaces": `(interface_declaration name: (identifier) @name) @symbol`,
-		"structs":    `(struct_declaration name: (identifier) @name) @symbol`,
-		"enums":      `(enum_declaration name: (identifier) @name) @symbol`,
-		"methods":    `(method_declaration name: (identifier) @name) @symbol`,
-		"properties": `(property_declaration name: (identifier) @name) @symbol`,
-		"fields":     `(field_declaration name: (identifier) @name) @symbol`,
+		"classes":      `(class_declaration name: (identifier) @name) @symbol`,
+		"interfaces":   `(interface_declaration name: (identifier) @name) @symbol`,
+		"structs":      `(struct_declaration name: (identifier) @name) @symbol`,
+		"enums":        `(enum_declaration name: (identifier) @name) @symbol`,
+		"methods":      `(method_declaration name: (identifier) @name) @symbol`,
+		"properties":   `(property_declaration name: (identifier) @name) @symbol`,
+		"fields":       `(field_declaration (variable_declaration (variable_declarator (identifier) @name))) @symbol`,
 		"constructors": `(constructor_declaration name: (identifier) @name) @symbol`,
-		"imports":    `(using_directive) @symbol`,
-		"namespaces": `(namespace_declaration name: [(identifier) (qualified_name)] @name) @symbol`,
-		"variables":  `(variable_declaration (variable_declarator name: (identifier) @name)) @symbol`,
+		"imports":      `(using_directive) @symbol`,
+		"namespaces":   `(namespace_declaration name: [(identifier) (qualified_name)] @name) @symbol`,
+		"variables":    `(variable_declaration (variable_declarator (identifier) @name)) @symbol`,
 	}
 }
 
@@ -44,14 +44,15 @@ func (CSharp) DecisionKinds() []string {
 		"switch_section",
 		"ternary_expression",
 		"catch_clause",
-		"binary_expression", // only counts when the operator is && or ||
+		"binary_expression",
 	}
 }
 
 func (CSharp) AuxQueries() map[string]string {
 	return map[string]string{
 		"identifiers": `[(identifier) (qualified_name)] @id`,
-		"calls":       `(invocation_expression function: [(identifier) (member_access_expression (identifier))] @callee)`,
+		"calls": `(invocation_expression function: (identifier) @callee)
+(invocation_expression function: (member_access_expression name: (identifier) @callee))`,
 	}
 }
 
