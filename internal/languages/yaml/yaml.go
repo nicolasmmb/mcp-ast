@@ -20,7 +20,6 @@ func (YAML) Language() *ts.Language {
 func (YAML) SymbolQueries() map[string]string {
 	return map[string]string{
 		"mappings": `(block_mapping_pair key: (flow_node (plain_scalar (string_scalar)) @name)) @symbol`,
-		"sequences": `(block_sequence_entry) @symbol`,
 	}
 }
 
