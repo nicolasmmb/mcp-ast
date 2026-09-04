@@ -33,6 +33,7 @@ type entry struct {
 	queries map[string]*CompiledQuery
 }
 
+// CompiledQuery holds a precompiled tree-sitter query and capture names.
 type CompiledQuery struct {
 	Q     *ts.Query
 	Names []string
@@ -85,23 +86,24 @@ func (r *Registry) Register(l Language) error {
 		if err := p.SetLanguage(l.Language()); err != nil {
 			panic(fmt.Sprintf("lang %s: %v", l.Name(), err))
 		}
-
-		func (r *Registry) Compiled(l Language, key string) (*CompiledQuery, bool) {
-			r.mu.RLock()
-			defer r.mu.RUnlock()
-			e, ok := r.langs[l.Name()]
-			if !ok {
-				return nil, false
-			}
-			cq, ok := e.queries[key]
-			return cq, ok
-		}
 		return p
 	}
 	r.mu.Lock()
 	r.langs[l.Name()] = e
 	r.mu.Unlock()
 	return nil
+}
+
+// Compiled returns a precompiled query by key (use SymbolKey/AuxKey).
+func (r *Registry) Compiled(l Language, key string) (*CompiledQuery, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	e, ok := r.langs[l.Name()]
+	if !ok {
+		return nil, false
+	}
+	cq, ok := e.queries[key]
+	return cq, ok
 }
 
 func (r *Registry) Get(name string) (Language, bool) {
