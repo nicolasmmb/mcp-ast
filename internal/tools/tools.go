@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"os"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -10,8 +11,6 @@ import (
 	"mcp-ast/internal/service"
 )
 
-// AST nodes are recursive, which the SDK's schema inference rejects (cycle),
-// so parse_ast_file ships a hand-written recursive output schema.
 var parseASTSchema = func() *jsonschema.Schema {
 	point := &jsonschema.Schema{
 		Type: "object",
@@ -44,8 +43,37 @@ var parseASTSchema = func() *jsonschema.Schema {
 	}
 }()
 
-// add registers one tool: the handler receives the service container and
-// returns the response body; timed() applies timeout + elapsed_ms + logging.
+var outlineSchema = func() *jsonschema.Schema {
+	point := &jsonschema.Schema{
+		Type: "object",
+		Properties: map[string]*jsonschema.Schema{
+			"row": {Type: "integer"},
+			"col": {Type: "integer"},
+		},
+	}
+	node := &jsonschema.Schema{
+		Type: "object",
+		Properties: map[string]*jsonschema.Schema{
+			"kind":     {Type: "string"},
+			"name":     {Type: "string"},
+			"text":     {Type: "string"},
+			"start":    {Ref: "#/$defs/point"},
+			"end":      {Ref: "#/$defs/point"},
+			"children": {Type: "array", Items: &jsonschema.Schema{Ref: "#/$defs/outline_node"}},
+		},
+	}
+	return &jsonschema.Schema{
+		Type: "object",
+		Properties: map[string]*jsonschema.Schema{
+			"elapsed_ms": {Type: "number"},
+			"language":   {Type: "string"},
+			"path":       {Type: "string"},
+			"outline":    {Type: "array", Items: &jsonschema.Schema{Ref: "#/$defs/outline_node"}},
+		},
+		Defs: map[string]*jsonschema.Schema{"point": point, "outline_node": node},
+	}
+}()
+
 func add[In any, Out TimedOutput](s *mcp.Server, svcs *service.Services, t *mcp.Tool,
 	h func(context.Context, *service.Services, In) (Out, error)) {
 	mcp.AddTool(s, t, timed(func(ctx context.Context, _ *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
@@ -54,54 +82,57 @@ func add[In any, Out TimedOutput](s *mcp.Server, svcs *service.Services, t *mcp.
 	}))
 }
 
-// Register declares every tool served by this MCP server. Adding a capability
-// is one entry here plus its service method.
+// Register declares every tool. Breaking change: legacy tool names removed (no aliases).
 func Register(s *mcp.Server, svcs *service.Services) {
 	add(s, svcs, &mcp.Tool{
 		Name:        "list_languages",
-		Description: "List the programming languages supported by this AST analysis server. Call this first to discover which languages are available before using other tools.",
+		Description: "List programming languages supported by this AST server. Call first to discover available languages before other tools.",
 	}, handleListLanguages)
+
 	add(s, svcs, &mcp.Tool{
-		Name:         "parse_ast_file",
-		Description:  "Parse a source file and return its full abstract syntax tree (AST) as a recursive JSON structure. Each node has type, field, named, start/end positions, and children. Use to explore the structure of a file or discover grammar node types. For targeted extraction prefer query_ast_file; for large files set max_depth (e.g. 5). Language is auto-detected from the file extension when omitted.",
+		Name:         "parse_ast",
+		Description:  "Parse one source file and return its AST as recursive JSON. Prefer query_ast for targeted extraction; set max_depth (e.g. 5) on large files.",
 		OutputSchema: parseASTSchema,
 	}, handleParseAST)
+
 	add(s, svcs, &mcp.Tool{
-		Name:        "query_ast_file",
-		Description: "Run a tree-sitter query over a source file and return matching nodes with their captures, text, and positions. Use for surgical extraction — e.g. find all function declarations, all string literals, all error handlers — without reading the whole file. Each match contains a captures array with name, text, start and end. Language is auto-detected from the file extension when omitted.",
+		Name:        "query_ast",
+		Description: "Run a tree-sitter query on one file. Prefer scan_symbols for built-in symbol kinds.",
 	}, handleQueryAST)
+
 	add(s, svcs, &mcp.Tool{
-		Name:        "symbols_file",
-		Description: "Extract symbols (classes, methods, fields, imports, etc.) from a single source file, grouped by kind. Each symbol has name, text, and position. Use this for one file; use scan_symbols_dir for a whole directory. Language is auto-detected from the file extension when omitted.",
-	}, handleSymbolsFile)
+		Name:        "scan_symbols",
+		Description: "Extract symbols from a file OR directory. Prefer outline_file for hierarchy; find_usages for references.",
+	}, handleScanSymbols)
+
 	add(s, svcs, &mcp.Tool{
 		Name:        "analyze_file",
-		Description: "Compute a full dossier for one source file in a single parse: size metrics (lines, bytes, AST nodes, max nesting), per-symbol-kind statistics, cyclomatic complexity per function/method (1 + decision points; scores above 10 are refactor candidates), and the call graph mapping each function to its callees with counts. Use to assess file complexity and internal flow. For directory-wide overviews use scan_symbols_dir.",
+		Description: "Full dossier for one file: metrics, complexity, call graph. For directory hotspots use rank_complexity.",
 	}, handleAnalyzeFile)
+
 	add(s, svcs, &mcp.Tool{
-		Name:        "get_text_file",
-		Description: "Return the exact source text for a 0-based (row, col) range. Coordinates come from AST nodes, symbols, captures, or matches returned by other tools. Ranges are inclusive at start, exclusive at end. Use to read the actual code behind any position without loading whole files. Language is auto-detected from the file extension when omitted.",
+		Name:        "get_text",
+		Description: "Return exact source text for a 0-based (row,col) range from other tool outputs.",
 	}, handleGetText)
+
 	add(s, svcs, &mcp.Tool{
-		Name:        "scan_symbols_dir",
-		Description: "Recursively scan a directory and extract symbols (classes, functions, methods, fields, attributes, variables, imports...) from every recognized source file, grouped by file path, then kind. Narrow with languages[] and/or kinds[]; pass name for an exact declaration lookup across the codebase. Errors per file are reported separately. For a single file, use symbols_file instead.",
-	}, handleScanDir)
+		Name:        "find_usages",
+		Description: "Find usages in a directory. mode=occurrences|callers|unused|definitions|imports. group_by_file defaults true. Run before rename/delete.",
+	}, handleFindUsages)
+
 	add(s, svcs, &mcp.Tool{
-		Name:        "unused_symbols_dir",
-		Description: "Find symbols declared but never referenced across a directory. Heuristic: a symbol whose name appears exactly once in all recognized source files is likely unused. Use to identify dead code — confirm suspects with callers_dir before deleting. Language is optional — omit to scan all recognized files.",
-	}, handleUnused)
+		Name:        "rank_complexity",
+		Description: "Rank functions/methods in a directory by cyclomatic complexity (top-N). Default limit=20.",
+	}, handleRankComplexity)
+
 	add(s, svcs, &mcp.Tool{
-		Name:        "usages_dir",
-		Description: "Find every occurrence of a symbol name across a directory, classified as definition (declaration site), call-site (callee of an invocation, carrying the enclosing function in caller), or reference. Use BEFORE renaming or deleting to enumerate all edit points. For aggregated who-calls-X counts per caller use callers_dir; for declarations only, scan_symbols_dir with name is lighter.",
-	}, handleUsages)
-	add(s, svcs, &mcp.Tool{
-		Name:        "callers_dir",
-		Description: "Find every function and method across a directory that calls a given target function, aggregated per caller with exact call counts. Given a function name, this answers who depends on it — use to assess the impact of changing or deleting it. For the raw occurrence list use usages_dir; for what a function calls, use analyze_file's call_graph.",
-	}, handleCallers)
+		Name:         "outline_file",
+		Description:  "Hierarchical symbol outline for one file via range containment. Prefer get_text for bodies.",
+		OutputSchema: outlineSchema,
+	}, handleOutlineFile)
 }
 
 type listLanguagesInput struct{}
-
 type listLanguagesOutput struct {
 	Timed
 	Languages []string `json:"languages"`
@@ -112,11 +143,10 @@ func handleListLanguages(_ context.Context, svcs *service.Services, _ listLangua
 }
 
 type parseASTInput struct {
-	Language string `json:"language,omitempty" jsonschema:"optional; language name, e.g. java, python, go. Omit to auto-detect from the file extension"`
-	Path     string `json:"path" jsonschema:"path to the source file to parse"`
-	MaxDepth int    `json:"max_depth,omitempty" jsonschema:"optional; maximum AST depth to include, 0 defaults to 20. Use lower values (3-5) for large files to keep output manageable"`
+	Language string `json:"language,omitempty" jsonschema:"optional; language name"`
+	Path     string `json:"path" jsonschema:"path to the source file"`
+	MaxDepth int    `json:"max_depth,omitempty" jsonschema:"optional; max AST depth, 0 defaults to 20"`
 }
-
 type parseASTOutput struct {
 	Timed
 	Language string       `json:"language"`
@@ -142,13 +172,12 @@ func handleParseAST(_ context.Context, svcs *service.Services, in parseASTInput)
 }
 
 type queryASTInput struct {
-	Language    string `json:"language,omitempty" jsonschema:"optional; language name, e.g. java, python, go. Omit to auto-detect from the file extension"`
-	Path        string `json:"path" jsonschema:"path to the source file to query"`
-	Query       string `json:"query" jsonschema:"tree-sitter query syntax, e.g. (method_declaration name: (identifier) @name) @method"`
-	Limit       int    `json:"limit,omitempty" jsonschema:"optional; maximum number of matches to return, 0 = unlimited"`
-	IncludeText bool   `json:"include_text,omitempty" jsonschema:"optional; true returns full source text of each matched node, false (default) returns a first-line summary"`
+	Language    string `json:"language,omitempty" jsonschema:"optional; language name"`
+	Path        string `json:"path" jsonschema:"path to the source file"`
+	Query       string `json:"query" jsonschema:"tree-sitter query syntax"`
+	Limit       int    `json:"limit,omitempty" jsonschema:"optional; max matches"`
+	IncludeText bool   `json:"include_text,omitempty" jsonschema:"optional; full text"`
 }
-
 type queryASTOutput struct {
 	Timed
 	Language string         `json:"language"`
@@ -167,30 +196,49 @@ func handleQueryAST(_ context.Context, svcs *service.Services, in queryASTInput)
 	return &queryASTOutput{Language: l.Name(), Matches: matches}, nil
 }
 
-type symbolsInput struct {
-	Language    string `json:"language,omitempty" jsonschema:"optional; language name, e.g. java, python, go. Omit to auto-detect from the file extension"`
-	Path        string `json:"path" jsonschema:"path to the source file to analyze"`
-	IncludeText bool   `json:"include_text,omitempty" jsonschema:"optional; true returns full declaration text, false (default) returns a first-line summary of each symbol"`
+type scanSymbolsInput struct {
+	Path        string   `json:"path" jsonschema:"file or directory"`
+	Languages   []string `json:"languages,omitempty" jsonschema:"optional language filter"`
+	Kinds       []string `json:"kinds,omitempty" jsonschema:"optional symbol kinds"`
+	Name        string   `json:"name,omitempty" jsonschema:"optional exact name"`
+	IncludeText bool     `json:"include_text,omitempty" jsonschema:"optional full text"`
+	Limit       int      `json:"limit,omitempty" jsonschema:"optional max files"`
 }
-
-type symbolsOutput struct {
+type scanSymbolsOutput struct {
 	Timed
-	service.SymbolsResult
+	service.ScanResult
 }
 
-func handleSymbolsFile(_ context.Context, svcs *service.Services, in symbolsInput) (*symbolsOutput, error) {
-	res, err := svcs.File.Symbols(in.Language, in.Path, in.IncludeText)
+func handleScanSymbols(ctx context.Context, svcs *service.Services, in scanSymbolsInput) (*scanSymbolsOutput, error) {
+	st, err := os.Stat(in.Path)
 	if err != nil {
 		return nil, err
 	}
-	return &symbolsOutput{SymbolsResult: *res}, nil
+	if !st.IsDir() {
+		lang := ""
+		if len(in.Languages) == 1 {
+			lang = in.Languages[0]
+		}
+		res, err := svcs.Scan.Path(lang, in.Path, in.IncludeText)
+		if err != nil {
+			return nil, err
+		}
+		return &scanSymbolsOutput{ScanResult: *res}, nil
+	}
+	res, err := svcs.Scan.Dir(ctx, service.ScanQuery{
+		Dir: in.Path, Languages: in.Languages, Kinds: in.Kinds,
+		Name: in.Name, IncludeText: in.IncludeText, Limit: in.Limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &scanSymbolsOutput{ScanResult: *res}, nil
 }
 
 type analyzeInput struct {
-	Language string `json:"language,omitempty" jsonschema:"optional; language name, e.g. java, python, go. Omit to auto-detect from the file extension"`
-	Path     string `json:"path" jsonschema:"path to the source file to analyze"`
+	Language string `json:"language,omitempty" jsonschema:"optional; language name"`
+	Path     string `json:"path" jsonschema:"path to the source file"`
 }
-
 type analyzeOutput struct {
 	Timed
 	service.FileReport
@@ -205,14 +253,13 @@ func handleAnalyzeFile(_ context.Context, svcs *service.Services, in analyzeInpu
 }
 
 type getTextInput struct {
-	Language string `json:"language,omitempty" jsonschema:"optional; language name, e.g. java, python, go. Omit to auto-detect from the file extension"`
+	Language string `json:"language,omitempty" jsonschema:"optional; language name"`
 	Path     string `json:"path" jsonschema:"path to the source file"`
-	StartRow int    `json:"start_row" jsonschema:"0-based start row (inclusive), as reported by AST nodes, symbols, or captures"`
-	StartCol int    `json:"start_col" jsonschema:"0-based start byte column (inclusive)"`
-	EndRow   int    `json:"end_row" jsonschema:"0-based end row (exclusive)"`
-	EndCol   int    `json:"end_col" jsonschema:"0-based end byte column (exclusive)"`
+	StartRow int    `json:"start_row" jsonschema:"0-based start row inclusive"`
+	StartCol int    `json:"start_col" jsonschema:"0-based start col inclusive"`
+	EndRow   int    `json:"end_row" jsonschema:"0-based end row exclusive"`
+	EndCol   int    `json:"end_col" jsonschema:"0-based end col exclusive"`
 }
-
 type getTextOutput struct {
 	Timed
 	Language string `json:"language"`
@@ -232,90 +279,71 @@ func handleGetText(_ context.Context, svcs *service.Services, in getTextInput) (
 	return &getTextOutput{Language: l.Name(), Path: in.Path, Text: text}, nil
 }
 
-type scanInput struct {
-	Path        string   `json:"path" jsonschema:"directory to scan recursively"`
-	Languages   []string `json:"languages,omitempty" jsonschema:"optional; language names to include, e.g. [\"go\",\"java\"]. Omit to auto-detect each file by extension"`
-	Kinds       []string `json:"kinds,omitempty" jsonschema:"optional; symbol kinds to return, e.g. [\"functions\",\"methods\"]. Omit for all kinds. Valid kinds per language - Go: types, functions, methods, variables, imports; Java: classes, interfaces, enums, records, methods, constructors, fields, variables, imports; Python: classes, functions, variables, imports"`
-	Name        string   `json:"name,omitempty" jsonschema:"optional; return only declarations whose name equals this value (exact match)"`
-	IncludeText bool     `json:"include_text,omitempty" jsonschema:"optional; true returns full declaration text, false (default) returns a first-line summary"`
-	Limit       int      `json:"limit,omitempty" jsonschema:"optional; maximum number of files returned, 0 = unlimited"`
+type findUsagesInput struct {
+	Mode        string   `json:"mode" jsonschema:"occurrences|callers|unused|definitions|imports"`
+	Name        string   `json:"name,omitempty" jsonschema:"symbol name; required except unused"`
+	Path        string   `json:"path" jsonschema:"directory to scan"`
+	Languages   []string `json:"languages,omitempty" jsonschema:"optional language filter"`
+	Limit       int      `json:"limit,omitempty" jsonschema:"optional max results"`
+	GroupByFile *bool    `json:"group_by_file,omitempty" jsonschema:"optional; default true"`
+	Kinds       []string `json:"kinds,omitempty" jsonschema:"optional occurrence kinds"`
 }
-
-type scanOutput struct {
+type findUsagesOutput struct {
 	Timed
-	service.ScanResult
+	service.FindResult
 }
 
-func handleScanDir(ctx context.Context, svcs *service.Services, in scanInput) (*scanOutput, error) {
-	res, err := svcs.Scan.Dir(ctx, service.ScanQuery{
-		Dir:         in.Path,
-		Languages:   in.Languages,
-		Kinds:       in.Kinds,
-		Name:        in.Name,
-		IncludeText: in.IncludeText,
-		Limit:       in.Limit,
+func handleFindUsages(ctx context.Context, svcs *service.Services, in findUsagesInput) (*findUsagesOutput, error) {
+	group := true
+	if in.GroupByFile != nil {
+		group = *in.GroupByFile
+	}
+	res, err := svcs.Find.Dir(ctx, service.FindQuery{
+		Mode: service.FindMode(in.Mode), Name: in.Name, Dir: in.Path,
+		Languages: in.Languages, Limit: in.Limit, GroupByFile: group, Kinds: in.Kinds,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &scanOutput{ScanResult: *res}, nil
+	return &findUsagesOutput{FindResult: *res}, nil
 }
 
-type unusedInput struct {
-	Path      string   `json:"path" jsonschema:"directory to scan recursively"`
-	Languages []string `json:"languages,omitempty" jsonschema:"optional; language names to include, e.g. [\"go\",\"java\"]. Omit to auto-detect each file by extension"`
-	Limit     int      `json:"limit,omitempty" jsonschema:"optional; maximum number of results, 0 = unlimited"`
+type rankComplexityInput struct {
+	Path      string   `json:"path" jsonschema:"directory to scan"`
+	Languages []string `json:"languages,omitempty" jsonschema:"optional language filter"`
+	Limit     int      `json:"limit,omitempty" jsonschema:"optional; default 20"`
 }
-
-type unusedOutput struct {
+type rankComplexityOutput struct {
 	Timed
-	service.UnusedResult
+	service.RankResult
 }
 
-func handleUnused(ctx context.Context, svcs *service.Services, in unusedInput) (*unusedOutput, error) {
-	res, err := svcs.Unused.Dir(ctx, in.Path, in.Languages, in.Limit)
+func handleRankComplexity(ctx context.Context, svcs *service.Services, in rankComplexityInput) (*rankComplexityOutput, error) {
+	limit := in.Limit
+	if limit == 0 {
+		limit = 20
+	}
+	res, err := svcs.Rank.ComplexityDir(ctx, in.Path, in.Languages, limit)
 	if err != nil {
 		return nil, err
 	}
-	return &unusedOutput{UnusedResult: *res}, nil
+	return &rankComplexityOutput{RankResult: *res}, nil
 }
 
-type usagesInput struct {
-	Name      string   `json:"name" jsonschema:"symbol name to find occurrences of"`
-	Path      string   `json:"path" jsonschema:"directory to scan recursively"`
-	Languages []string `json:"languages,omitempty" jsonschema:"optional; language names to include, e.g. [\"go\",\"java\"]. Omit to auto-detect each file by extension"`
-	Limit     int      `json:"limit,omitempty" jsonschema:"optional; maximum number of matches, 0 = unlimited"`
+type outlineInput struct {
+	Language    string `json:"language,omitempty" jsonschema:"optional; language name"`
+	Path        string `json:"path" jsonschema:"path to the source file"`
+	IncludeText bool   `json:"include_text,omitempty" jsonschema:"optional full text"`
 }
-
-type usagesOutput struct {
+type outlineOutput struct {
 	Timed
-	service.UsagesResult
+	service.OutlineResult
 }
 
-func handleUsages(ctx context.Context, svcs *service.Services, in usagesInput) (*usagesOutput, error) {
-	res, err := svcs.Usages.Dir(ctx, in.Name, in.Path, in.Languages, in.Limit)
+func handleOutlineFile(_ context.Context, svcs *service.Services, in outlineInput) (*outlineOutput, error) {
+	res, err := svcs.File.Outline(in.Language, in.Path, in.IncludeText)
 	if err != nil {
 		return nil, err
 	}
-	return &usagesOutput{UsagesResult: *res}, nil
-}
-
-type callersInput struct {
-	Name      string   `json:"name" jsonschema:"target function/method name to find callers of, e.g. validate, processOrder"`
-	Path      string   `json:"path" jsonschema:"directory to scan recursively"`
-	Languages []string `json:"languages,omitempty" jsonschema:"optional; language names to include, e.g. [\"go\",\"java\"]. Omit to auto-detect each file by extension"`
-	Limit     int      `json:"limit,omitempty" jsonschema:"optional; maximum number of results, 0 = unlimited"`
-}
-
-type callersOutput struct {
-	Timed
-	service.CallersResult
-}
-
-func handleCallers(ctx context.Context, svcs *service.Services, in callersInput) (*callersOutput, error) {
-	res, err := svcs.Calls.Callers(ctx, in.Name, in.Path, in.Languages, in.Limit)
-	if err != nil {
-		return nil, err
-	}
-	return &callersOutput{CallersResult: *res}, nil
+	return &outlineOutput{OutlineResult: *res}, nil
 }
