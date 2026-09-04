@@ -36,3 +36,23 @@ func (s *FileAnalysisService) Symbols(langName, path string, includeText bool) (
 	}
 	return &SymbolsResult{Language: l.Name(), Symbols: syms}, nil
 }
+
+// OutlineResult is the hierarchical symbol outline for one file.
+type OutlineResult struct {
+	Language string                `json:"language"`
+	Path     string                `json:"path"`
+	Outline  []*engine.OutlineNode `json:"outline"`
+}
+
+// Outline returns a hierarchical symbol tree for path.
+func (s *FileAnalysisService) Outline(langName, path string, includeText bool) (*OutlineResult, error) {
+	l, err := s.eng.Resolve(langName, path)
+	if err != nil {
+		return nil, err
+	}
+	nodes, err := s.eng.Outline(l, path, includeText)
+	if err != nil {
+		return nil, err
+	}
+	return &OutlineResult{Language: l.Name(), Path: path, Outline: nodes}, nil
+}
