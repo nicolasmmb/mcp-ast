@@ -624,7 +624,7 @@ func (s *RepoService) Scan(id string, languages, kinds []string, name string, li
 		out[path] = facts.Symbols
 	}
 	pruneGroups(out, kindSet(kinds), name, func(se engine.Symbol) string { return se.Name })
-	res := &ScanResult{Language: displayLang(languages), Files: limitFiles(out, limit)}
+	res := &ScanResult{Language: displayLang(languages), Source: "indexed", Files: limitFiles(out, limit)}
 	return res, nil
 }
 

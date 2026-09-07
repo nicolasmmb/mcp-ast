@@ -247,6 +247,7 @@ func handleDropRepo(_ context.Context, svcs *service.Services, in dropRepoInput)
 type searchRepoOutput struct {
 	Timed
 	Mode       string                    `json:"mode"`
+	Source     string                    `json:"source,omitempty"`
 	Matches    []engine.UsageMatch       `json:"matches,omitempty"`
 	Complexity []engine.RankedComplexity `json:"complexity,omitempty"`
 	NextCursor string                    `json:"next_cursor,omitempty"`
@@ -316,13 +317,13 @@ func handleSearchRepo(_ context.Context, svcs *service.Services, in searchRepoIn
 		if err != nil {
 			return nil, err
 		}
-		return &searchRepoOutput{Mode: in.Mode, Matches: page.Matches, NextCursor: page.NextCursor, Truncated: page.Truncated}, nil
+		return &searchRepoOutput{Mode: in.Mode, Source: "indexed", Matches: page.Matches, NextCursor: page.NextCursor, Truncated: page.Truncated}, nil
 	case "complexity":
 		entries, err := svcs.Repo.Complexity(in.RepoID, in.Limit)
 		if err != nil {
 			return nil, err
 		}
-		return &searchRepoOutput{Mode: in.Mode, Complexity: entries}, nil
+		return &searchRepoOutput{Mode: in.Mode, Source: "indexed", Complexity: entries}, nil
 	default:
 		return nil, fmt.Errorf("invalid search_repo mode %q", in.Mode)
 	}
@@ -531,6 +532,7 @@ func handleFindUsages(ctx context.Context, svcs *service.Services, in findUsages
 		res := &service.FindResult{
 			Language:   "indexed",
 			Mode:       in.Mode,
+			Source:     "indexed",
 			Matches:    page.Matches,
 			Kinds:      in.Kinds,
 			NextCursor: page.NextCursor,
@@ -579,7 +581,7 @@ func handleRankComplexity(ctx context.Context, svcs *service.Services, in rankCo
 		if err != nil {
 			return nil, err
 		}
-		return &rankComplexityOutput{RankResult: service.RankResult{Language: "indexed", Entries: entries}}, nil
+		return &rankComplexityOutput{RankResult: service.RankResult{Language: "indexed", Source: "indexed", Entries: entries}}, nil
 	}
 	if in.Path == "" {
 		return nil, fmt.Errorf("path is required when repo_id is empty")
