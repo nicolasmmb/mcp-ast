@@ -53,116 +53,153 @@ func (s *FindService) Dir(ctx context.Context, q FindQuery) (*FindResult, error)
 	res := &FindResult{Language: displayLang(q.Languages), Mode: string(q.Mode)}
 	errs := map[string]string{}
 
-	switch q.Mode {
-	case FindOccurrences:
-		matches := make([]engine.UsageMatch, 0)
-		kinds := usageKindSet(q.Kinds)
-		for _, f := range fs {
-			ms, es, err := s.eng.Usages(ctx, q.Dir, q.Name, f, 0)
+	handlers := map[FindMode]func() error{
+		FindOccurrences: func() error {
+			matches, kinds, localErrs, err := s.findOccurrences(ctx, q, fs)
 			if err != nil {
-				return nil, err
+				return err
 			}
-			matches = append(matches, filterUsageKinds(ms, kinds)...)
-			for p, e := range es {
-				errs[p] = e
+			mergeErrors(errs, localErrs)
+			res.Matches = matches
+			res.Kinds = kinds
+			if q.GroupByFile {
+				res.Files = groupUsageByFile(matches)
 			}
-			if len(kinds) == 0 || kinds["import"] {
-				im, ies, err := s.collectDefinitionMatches(ctx, q.Dir, q.Name, f, true)
-				if err != nil {
-					return nil, err
-				}
-				matches = append(matches, im...)
-				for p, e := range ies {
-					errs[p] = e
-				}
-			}
-		}
-		sortUsageMatches(matches)
-		if q.Limit > 0 && len(matches) > q.Limit {
-			matches = matches[:q.Limit]
-		}
-		res.Matches = matches
-		res.Kinds = usageKindsList(kinds)
-		if q.GroupByFile {
-			res.Files = groupUsageByFile(matches)
-		}
-	case FindCallers:
-		all := make([]engine.Caller, 0)
-		for _, f := range fs {
-			cs, es, err := s.eng.Callers(ctx, q.Dir, q.Name, f, 0)
+			return nil
+		},
+		FindCallers: func() error {
+			callers, localErrs, err := s.findCallers(ctx, q, fs)
 			if err != nil {
-				return nil, err
+				return err
 			}
-			all = append(all, cs...)
-			for p, e := range es {
-				errs[p] = e
-			}
-		}
-		sort.Slice(all, func(i, j int) bool {
-			if all[i].Count != all[j].Count {
-				return all[i].Count > all[j].Count
-			}
-			if all[i].File != all[j].File {
-				return all[i].File < all[j].File
-			}
-			return all[i].Name < all[j].Name
-		})
-		if q.Limit > 0 && len(all) > q.Limit {
-			all = all[:q.Limit]
-		}
-		res.Callers = all
-	case FindUnused:
-		all := make([]engine.SearchMatch, 0)
-		for _, f := range fs {
-			r, err := s.eng.UnusedSymbols(ctx, q.Dir, f, 0)
+			mergeErrors(errs, localErrs)
+			res.Callers = callers
+			return nil
+		},
+		FindUnused: func() error {
+			symbols, localErrs, err := s.findUnused(ctx, q, fs)
 			if err != nil {
-				return nil, err
+				return err
 			}
-			all = append(all, r.Matches...)
-			for p, e := range r.Errors {
-				errs[p] = e
+			mergeErrors(errs, localErrs)
+			res.Symbols = symbols
+			return nil
+		},
+		FindDefinitions: func() error {
+			matches, localErrs, err := s.findDefinitionsByFilters(ctx, q, fs, false)
+			if err != nil {
+				return err
 			}
-		}
-		sort.Slice(all, func(i, j int) bool {
-			if all[i].File != all[j].File {
-				return all[i].File < all[j].File
+			mergeErrors(errs, localErrs)
+			res.Matches = matches
+			if q.GroupByFile {
+				res.Files = groupUsageByFile(matches)
 			}
-			if all[i].Line != all[j].Line {
-				return all[i].Line < all[j].Line
+			return nil
+		},
+		FindImports: func() error {
+			matches, localErrs, err := s.findDefinitionsByFilters(ctx, q, fs, true)
+			if err != nil {
+				return err
 			}
-			return all[i].Name < all[j].Name
-		})
-		if q.Limit > 0 && len(all) > q.Limit {
-			all = all[:q.Limit]
-		}
-		res.Symbols = all
-	case FindDefinitions:
-		matches, localErrs, err := s.findDefinitionsByFilters(ctx, q, fs, false)
-		if err != nil {
-			return nil, err
-		}
-		mergeErrors(errs, localErrs)
-		res.Matches = matches
-		if q.GroupByFile {
-			res.Files = groupUsageByFile(matches)
-		}
-	case FindImports:
-		matches, localErrs, err := s.findDefinitionsByFilters(ctx, q, fs, true)
-		if err != nil {
-			return nil, err
-		}
-		mergeErrors(errs, localErrs)
-		res.Matches = matches
-		if q.GroupByFile {
-			res.Files = groupUsageByFile(matches)
-		}
-	default:
+			mergeErrors(errs, localErrs)
+			res.Matches = matches
+			if q.GroupByFile {
+				res.Files = groupUsageByFile(matches)
+			}
+			return nil
+		},
+	}
+	handle, ok := handlers[q.Mode]
+	if !ok {
 		return nil, ErrInvalidMode{Mode: string(q.Mode)}
+	}
+	if err := handle(); err != nil {
+		return nil, err
 	}
 	if len(errs) > 0 {
 		res.Errors = errs
 	}
 	return res, nil
+}
+
+func (s *FindService) findOccurrences(ctx context.Context, q FindQuery, fs []lang.Language) ([]engine.UsageMatch, []string, map[string]string, error) {
+	matches := make([]engine.UsageMatch, 0)
+	errs := map[string]string{}
+	kinds := usageKindSet(q.Kinds)
+	for _, f := range fs {
+		ms, es, err := s.eng.Usages(ctx, q.Dir, q.Name, f, 0)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		matches = append(matches, filterUsageKinds(ms, kinds)...)
+		mergeErrors(errs, es)
+		if len(kinds) == 0 || kinds["import"] {
+			imports, importErrs, err := s.collectDefinitionMatches(ctx, q.Dir, q.Name, f, true)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			matches = append(matches, imports...)
+			mergeErrors(errs, importErrs)
+		}
+	}
+	sortUsageMatches(matches)
+	if q.Limit > 0 && len(matches) > q.Limit {
+		matches = matches[:q.Limit]
+	}
+	return matches, usageKindsList(kinds), errs, nil
+}
+
+func (s *FindService) findCallers(ctx context.Context, q FindQuery, fs []lang.Language) ([]engine.Caller, map[string]string, error) {
+	callers := make([]engine.Caller, 0)
+	errs := map[string]string{}
+	for _, f := range fs {
+		matches, localErrs, err := s.eng.Callers(ctx, q.Dir, q.Name, f, 0)
+		if err != nil {
+			return nil, nil, err
+		}
+		callers = append(callers, matches...)
+		mergeErrors(errs, localErrs)
+	}
+	sort.Slice(callers, func(i, j int) bool {
+		if callers[i].Count != callers[j].Count {
+			return callers[i].Count > callers[j].Count
+		}
+		if callers[i].File != callers[j].File {
+			return callers[i].File < callers[j].File
+		}
+		return callers[i].Name < callers[j].Name
+	})
+	if q.Limit > 0 && len(callers) > q.Limit {
+		callers = callers[:q.Limit]
+	}
+	return callers, errs, nil
+}
+
+func (s *FindService) findUnused(ctx context.Context, q FindQuery, fs []lang.Language) ([]engine.SearchMatch, map[string]string, error) {
+	symbols := make([]engine.SearchMatch, 0)
+	errs := map[string]string{}
+	for _, f := range fs {
+		result, err := s.eng.UnusedSymbols(ctx, q.Dir, f, 0)
+		if err != nil {
+			return nil, nil, err
+		}
+		symbols = append(symbols, result.Matches...)
+		mergeErrors(errs, result.Errors)
+	}
+	sort.Slice(symbols, func(i, j int) bool {
+		if symbols[i].File != symbols[j].File {
+			return symbols[i].File < symbols[j].File
+		}
+		if symbols[i].Line != symbols[j].Line {
+			return symbols[i].Line < symbols[j].Line
+		}
+		return symbols[i].Name < symbols[j].Name
+	})
+	if q.Limit > 0 && len(symbols) > q.Limit {
+		symbols = symbols[:q.Limit]
+	}
+	return symbols, errs, nil
 }
 
 type ErrInvalidMode struct{ Mode string }
@@ -268,25 +305,31 @@ func (s *FindService) collectDefinitionMatches(ctx context.Context, dir, name st
 	}
 	matches := make([]engine.UsageMatch, 0)
 	for path, groups := range files {
-		for kind, syms := range groups {
-			isImport := kind == "imports"
-			if importsOnly && !isImport {
-				continue
-			}
-			if !importsOnly && isImport {
-				continue
-			}
-			for _, sym := range syms {
-				if name != "" && sym.Name != name && !strings.Contains(sym.Text, name) {
-					continue
-				}
-				mk := "definition"
-				if isImport {
-					mk = "import"
-				}
-				matches = append(matches, engine.UsageMatch{File: path, Line: sym.Start.Row + 1, Col: sym.Start.Col, Text: sym.Text, Kind: mk})
-			}
-		}
+		matches = append(matches, matchSymbols(path, groups, name, importsOnly)...)
 	}
 	return matches, errs, nil
+}
+
+func matchSymbols(path string, groups map[string][]engine.Symbol, name string, importsOnly bool) []engine.UsageMatch {
+	matches := make([]engine.UsageMatch, 0)
+	for kind, symbols := range groups {
+		isImport := kind == "imports"
+		if importsOnly != isImport {
+			continue
+		}
+		for _, symbol := range symbols {
+			if name != "" && symbol.Name != name && !strings.Contains(symbol.Text, name) {
+				continue
+			}
+			matchKind := "definition"
+			if isImport {
+				matchKind = "import"
+			}
+			matches = append(matches, engine.UsageMatch{
+				File: path, Line: symbol.Start.Row + 1, Col: symbol.Start.Col,
+				Text: symbol.Text, Kind: matchKind,
+			})
+		}
+	}
+	return matches
 }

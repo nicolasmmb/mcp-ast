@@ -15,31 +15,36 @@ import (
 // skipDirNames are directory basenames skipped during recursive walks.
 // Hidden directories (prefix ".") are also skipped, except the walk root.
 var skipDirNames = map[string]struct{}{
-	"node_modules": {},
-	"vendor":       {},
-	"target":       {},
-	"dist":         {},
-	"build":        {},
-	"out":          {},
-	"bin":          {},
-	"__pycache__":  {},
-	".venv":        {},
-	"venv":         {},
-	"env":          {},
-	".tox":         {},
-	".mypy_cache":  {},
+	"node_modules":  {},
+	"vendor":        {},
+	"target":        {},
+	"dist":          {},
+	"build":         {},
+	"out":           {},
+	"bin":           {},
+	"__pycache__":   {},
+	".venv":         {},
+	"venv":          {},
+	"env":           {},
+	".tox":          {},
+	".mypy_cache":   {},
 	".pytest_cache": {},
-	".next":        {},
-	".nuxt":        {},
-	".svelte-kit":  {},
-	"coverage":     {},
-	".turbo":       {},
-	".cache":       {},
-	"Pods":         {},
-	"Carthage":     {},
-	".gradle":      {},
-	".idea":        {},
-	".vscode":      {},
+	".next":         {},
+	".nuxt":         {},
+	".svelte-kit":   {},
+	"coverage":      {},
+	".turbo":        {},
+	".cache":        {},
+	"Pods":          {},
+	"Carthage":      {},
+	".gradle":       {},
+	".idea":         {},
+	".vscode":       {},
+}
+
+type fileTask struct {
+	path string
+	lang lang.Language
 }
 
 // shouldSkipDir reports whether a directory should be skipped during walks.
@@ -60,7 +65,9 @@ func shouldSkipDir(root, path string, name string) bool {
 // results grouped by kind (classes, methods, fields, imports, ...).
 func (e *Engine) Symbols(l lang.Language, path string) (map[string][]Symbol, error) {
 	return e.SymbolsText(l, path, false)
-} // SymbolsText is Symbols with a fullText switch: when true, symbol text is the
+}
+
+// SymbolsText is Symbols with a fullText switch: when true, symbol text is the
 // full node source instead of the first-line summary.
 func (e *Engine) SymbolsText(l lang.Language, path string, fullText bool) (map[string][]Symbol, error) {
 	src, tree, err := e.parseFile(l, path)
@@ -69,8 +76,7 @@ func (e *Engine) SymbolsText(l lang.Language, path string, fullText bool) (map[s
 	}
 	defer tree.Close()
 	out := make(map[string][]Symbol)
-	for kind, qs := range l.SymbolQueries() {
-		_ = qs
+	for kind := range l.SymbolQueries() {
 		matches, err := e.runCompiledQuery(l, src, tree.RootNode(), lang.SymbolKey(kind), 0, fullText)
 		if err != nil {
 			return nil, fmt.Errorf("symbol query %q: %w", kind, err)
@@ -127,13 +133,16 @@ func (e *Engine) ScanSymbols(ctx context.Context, dir string, filter lang.Langua
 // Errors from fn are collected per-file in errs and never abort the walk;
 // walk-level errors (e.g. ctx cancellation) are returned.
 func (e *Engine) walkFiles(ctx context.Context, dir string, filter lang.Language, fn func(path string, l lang.Language) error) (map[string]string, error) {
-	errs := make(map[string]string)
-	type fileTask struct {
-		path string
-		lang lang.Language
+	tasks, err := e.collectFileTasks(ctx, dir, filter)
+	if err != nil {
+		return nil, err
 	}
+	return runFileTasks(ctx, tasks, fn)
+}
+
+func (e *Engine) collectFileTasks(ctx context.Context, dir string, filter lang.Language) ([]fileTask, error) {
 	tasks := make([]fileTask, 0, 64)
-	walk := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -146,25 +155,35 @@ func (e *Engine) walkFiles(ctx context.Context, dir string, filter lang.Language
 			}
 			return nil
 		}
-		var l lang.Language
-		if filter != nil {
-			if !hasExt(d.Name(), filter.Extensions()) {
-				return nil
-			}
-			l = filter
-		} else {
-			ll, err := e.reg.Resolve("", path)
-			if err != nil {
-				return nil
-			}
-			l = ll
+		l, ok := e.fileLanguage(filter, path, d.Name())
+		if !ok {
+			return nil
 		}
 		tasks = append(tasks, fileTask{path: path, lang: l})
 		return nil
 	})
-	if err := walk; err != nil {
+	if err != nil {
 		return nil, err
 	}
+	return tasks, nil
+}
+
+func (e *Engine) fileLanguage(filter lang.Language, path, name string) (lang.Language, bool) {
+	if filter != nil {
+		if !hasExt(name, filter.Extensions()) {
+			return nil, false
+		}
+		return filter, true
+	}
+	l, err := e.reg.Resolve("", path)
+	if err != nil {
+		return nil, false
+	}
+	return l, true
+}
+
+func runFileTasks(ctx context.Context, tasks []fileTask, fn func(path string, l lang.Language) error) (map[string]string, error) {
+	errs := make(map[string]string)
 	workers := runtime.GOMAXPROCS(0)
 	if workers < 2 {
 		workers = 2

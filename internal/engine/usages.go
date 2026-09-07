@@ -30,50 +30,9 @@ func (e *Engine) Usages(ctx context.Context, dir, name string, filter lang.Langu
 	matches := []UsageMatch{}
 	var mu sync.Mutex
 	errs, err := e.walkFiles(ctx, dir, filter, func(path string, l lang.Language) error {
-		_, ok := l.AuxQueries()["identifiers"]
-		if !ok {
-			return nil
-		}
-		src, tree, err := e.parseFile(l, path)
+		fileMatches, err := e.classifyUsages(l, path, name)
 		if err != nil {
 			return err
-		}
-		defer tree.Close()
-		root := tree.RootNode()
-		defPos := e.definitionPositions(l, root, src, name)
-		callPos := e.callPositions(l, root, src, name)
-		cq, ok := e.reg.Compiled(l, lang.AuxKey("identifiers"))
-		if !ok {
-			return fmt.Errorf("compiled identifier query not found for %s", l.Name())
-		}
-		c := ts.NewQueryCursor()
-		defer c.Close()
-		it := c.Matches(cq.Q, root, src)
-		fileMatches := make([]UsageMatch, 0, 8)
-		for m := it.Next(); m != nil; m = it.Next() {
-			for _, cap := range m.Captures {
-				if cap.Node.Utf8Text(src) != name {
-					continue
-				}
-				start := point(cap.Node.StartPosition())
-				u := UsageMatch{
-					File: path,
-					Line: start.Row + 1,
-					Col:  start.Col,
-					Text: firstLine(cap.Node.Parent().Utf8Text(src)),
-				}
-				switch {
-				case defPos[start]:
-					u.Kind = "definition"
-				default:
-					if caller, ok := callPos[start]; ok {
-						u.Kind, u.Caller = "call-site", caller
-					} else {
-						u.Kind = "reference"
-					}
-				}
-				fileMatches = append(fileMatches, u)
-			}
 		}
 		mu.Lock()
 		matches = append(matches, fileMatches...)
@@ -87,6 +46,51 @@ func (e *Engine) Usages(ctx context.Context, dir, name string, filter lang.Langu
 		matches = matches[:limit]
 	}
 	return matches, errs, nil
+}
+
+func (e *Engine) classifyUsages(l lang.Language, path, name string) ([]UsageMatch, error) {
+	if _, ok := l.AuxQueries()["identifiers"]; !ok {
+		return nil, nil
+	}
+	src, tree, err := e.parseFile(l, path)
+	if err != nil {
+		return nil, err
+	}
+	defer tree.Close()
+	root := tree.RootNode()
+	defPos := e.definitionPositions(l, root, src, name)
+	callPos := e.callPositions(l, root, src, name)
+	cq, ok := e.reg.Compiled(l, lang.AuxKey("identifiers"))
+	if !ok {
+		return nil, fmt.Errorf("compiled identifier query not found for %s", l.Name())
+	}
+	c := ts.NewQueryCursor()
+	defer c.Close()
+	it := c.Matches(cq.Q, root, src)
+	matches := make([]UsageMatch, 0, 8)
+	for m := it.Next(); m != nil; m = it.Next() {
+		for _, cap := range m.Captures {
+			if cap.Node.Utf8Text(src) != name {
+				continue
+			}
+			start := point(cap.Node.StartPosition())
+			match := UsageMatch{
+				File: path,
+				Line: start.Row + 1,
+				Col:  start.Col,
+				Text: firstLine(cap.Node.Parent().Utf8Text(src)),
+			}
+			if defPos[start] {
+				match.Kind = "definition"
+			} else if caller, ok := callPos[start]; ok {
+				match.Kind, match.Caller = "call-site", caller
+			} else {
+				match.Kind = "reference"
+			}
+			matches = append(matches, match)
+		}
+	}
+	return matches, nil
 }
 
 // definitionPositions collects the start positions of every declaration of
