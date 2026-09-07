@@ -44,11 +44,16 @@ case "$(uname -m)" in
 esac
 log "Platform detected: $os/$arch."
 
-log "Step 3/7: Resolving the latest release."
-release_url="$(curl -fsSL -o /dev/null -w '%{url_effective}' "$repo_url/releases/latest")"
-version="${release_url##*/}"
-[ -n "$version" ] && [ "$version" != "latest" ] || fail "Could not determine the latest release version."
-log "Latest release: $version."
+log "Step 3/7: Resolving the release."
+if [ -n "${AST_MCP_VERSION:-}" ]; then
+  version="$AST_MCP_VERSION"
+  log "Using requested version: $version."
+else
+  release_url="$(curl -fsSL -o /dev/null -w '%{url_effective}' "$repo_url/releases/latest")"
+  version="${release_url##*/}"
+  [ -n "$version" ] && [ "$version" != "latest" ] || fail "Could not determine the latest release version."
+  log "Latest release: $version."
+fi
 
 ext=""
 [ "$os" = windows ] && ext=".exe"
