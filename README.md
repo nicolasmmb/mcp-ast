@@ -210,6 +210,21 @@ Instalação automática (detecta OS/arquitetura, baixa a `latest` e adiciona ao
 curl -fsSL https://raw.githubusercontent.com/nicolasmmb/mcp-ast/main/install.sh | bash
 ```
 
+Versão específica (release):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nicolasmmb/mcp-ast/main/install.sh | AST_MCP_VERSION=v0.7.1 bash
+```
+
+Binário de um PR (artifact do workflow `pr-build`, sem precisar do GitHub CLI):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nicolasmmb/mcp-ast/main/install.sh | AST_MCP_PR=13 bash
+```
+
+O modo PR precisa de `curl`, `jq` e `unzip`. Se `GH_TOKEN` estiver definido o
+download usa a API oficial; senão usa `nightly.link` como proxy público dos artifacts.
+
 Ou compile localmente:
 
 ```bash

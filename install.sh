@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo="nicolasmmb/mcp-ast"
 repo_url="https://github.com/$repo"
+api_url="https://api.github.com/repos/$repo"
 
 log() {
   printf '[ast-mcp] %s\n' "$*"
@@ -15,6 +16,7 @@ fail() {
 
 cleanup() {
   [ -z "${tmp_binary:-}" ] || rm -f "$tmp_binary"
+  [ -z "${tmp_dir:-}" ] || rm -rf "$tmp_dir"
 }
 
 on_error() {
@@ -44,36 +46,81 @@ case "$(uname -m)" in
 esac
 log "Platform detected: $os/$arch."
 
-log "Step 3/7: Resolving the release."
-if [ -n "${AST_MCP_VERSION:-}" ]; then
-  version="$AST_MCP_VERSION"
-  log "Using requested version: $version."
-else
-  release_url="$(curl -fsSL -o /dev/null -w '%{url_effective}' "$repo_url/releases/latest")"
-  version="${release_url##*/}"
-  [ -n "$version" ] && [ "$version" != "latest" ] || fail "Could not determine the latest release version."
-  log "Latest release: $version."
-fi
-
 ext=""
 [ "$os" = windows ] && ext=".exe"
-asset="ast-mcp-$os-$arch$ext"
-asset_url="$repo_url/releases/download/$version/$asset"
-checksum_url="$asset_url.sha256"
-
+bin_name="ast-mcp-$os-$arch$ext"
 install_dir="$HOME/.local/bin"
 dest="$install_dir/ast-mcp$ext"
+tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/ast-mcp.XXXXXX")"
 
-log "Step 4/7: Downloading $asset."
-mkdir -p "$install_dir"
-tmp_binary="$(mktemp "${TMPDIR:-/tmp}/ast-mcp.XXXXXX")"
-curl -fsSL --retry 3 --retry-delay 1 -o "$tmp_binary" "$asset_url"
-size="$(wc -c < "$tmp_binary" | tr -d '[:space:]')"
-log "Downloaded $size bytes."
+# ---------------------------------------------------------------------------
+# Resolve the download: PR artifact (AST_MCP_PR), pinned release
+# (AST_MCP_VERSION) or latest release.
+# ---------------------------------------------------------------------------
+if [ -n "${AST_MCP_PR:-}" ]; then
+  log "Step 3/7: Resolving PR #$AST_MCP_PR build."
+  command -v jq >/dev/null 2>&1 || fail "jq is required to install a PR build (brew install jq / apt install jq)."
+  command -v unzip >/dev/null 2>&1 || fail "unzip is required to install a PR build."
 
-log "Step 5/7: Verifying SHA-256 checksum."
-expected="$(curl -fsSL "$checksum_url" | cut -d ' ' -f1)"
-[ -n "$expected" ] || fail "Release checksum is empty."
+  pr_number="$AST_MCP_PR"
+  log "Fetching PR #$pr_number metadata."
+  head_sha="$(curl -fsSL "$api_url/pulls/$pr_number" | jq -r '.head.sha // empty')"
+  [ -n "$head_sha" ] || fail "Could not resolve PR #$pr_number (does it exist?)."
+
+  log "Finding the latest pr-build run."
+  run_id="$(curl -fsSL "$api_url/actions/workflows/pr.yml/runs?head_sha=$head_sha&per_page=20" \
+    | jq -r '[.workflow_runs[] | select(.status == "completed" and .conclusion == "success")][0].id // empty')"
+  [ -n "$run_id" ] || fail "No successful pr-build run for PR #$pr_number yet. Wait for the PR checks to finish."
+
+  log "Finding artifact $bin_name in run $run_id."
+  artifact_id="$(curl -fsSL "$api_url/actions/runs/$run_id/artifacts" \
+    | jq -r --arg name "$bin_name" '.artifacts[] | select(.name == $name) | .id' | head -1)"
+  [ -n "$artifact_id" ] || fail "Artifact $bin_name not found in run $run_id."
+
+  version="pr-$pr_number"
+  log "PR build resolved: $version (run $run_id, artifact $artifact_id)."
+
+  log "Step 4/7: Downloading artifact (zip)."
+  if [ -n "${GH_TOKEN:-$GITHUB_TOKEN}" ]; then
+    curl -fsSL -H "Authorization: Bearer ${GH_TOKEN:-$GITHUB_TOKEN}" \
+      -H "Accept: application/vnd.github+json" \
+      "$api_url/actions/artifacts/$artifact_id/zip" -o "$tmp_dir/artifact.zip"
+  else
+    # nightly.link proxies public artifacts without authentication
+    curl -fsSL --retry 3 --retry-delay 1 \
+      "https://nightly.link/$repo/actions/runs/$run_id/$bin_name.zip" -o "$tmp_dir/artifact.zip"
+  fi
+  unzip -q -o "$tmp_dir/artifact.zip" -d "$tmp_dir"
+  tmp_binary="$tmp_dir/$bin_name"
+  [ -f "$tmp_binary" ] || fail "Artifact zip did not contain $bin_name."
+
+  log "Step 5/7: Verifying SHA-256 checksum."
+  expected="$(cut -d ' ' -f1 < "$tmp_dir/$bin_name.sha256" 2>/dev/null || true)"
+  [ -n "$expected" ] || fail "Artifact zip did not contain $bin_name.sha256."
+else
+  log "Step 3/7: Resolving the release."
+  if [ -n "${AST_MCP_VERSION:-}" ]; then
+    version="$AST_MCP_VERSION"
+    log "Using requested version: $version."
+  else
+    release_url="$(curl -fsSL -o /dev/null -w '%{url_effective}' "$repo_url/releases/latest")"
+    version="${release_url##*/}"
+    [ -n "$version" ] && [ "$version" != "latest" ] || fail "Could not determine the latest release version."
+    log "Latest release: $version."
+  fi
+
+  asset_url="$repo_url/releases/download/$version/$bin_name"
+  checksum_url="$asset_url.sha256"
+
+  log "Step 4/7: Downloading $bin_name."
+  tmp_binary="$tmp_dir/$bin_name"
+  curl -fsSL --retry 3 --retry-delay 1 -o "$tmp_binary" "$asset_url"
+
+  log "Step 5/7: Verifying SHA-256 checksum."
+  expected="$(curl -fsSL "$checksum_url" | cut -d ' ' -f1)"
+  [ -n "$expected" ] || fail "Release checksum is empty."
+fi
+
 if command -v sha256sum >/dev/null 2>&1; then
   actual="$(sha256sum "$tmp_binary" | cut -d ' ' -f1)"
 elif command -v shasum >/dev/null 2>&1; then
@@ -84,7 +131,10 @@ fi
 [ "$actual" = "$expected" ] || fail "Checksum mismatch: expected $expected, got $actual."
 log "Checksum verified."
 
+size="$(wc -c < "$tmp_binary" | tr -d '[:space:]')"
+
 log "Step 6/7: Installing to $dest."
+mkdir -p "$install_dir"
 mv "$tmp_binary" "$dest"
 tmp_binary=""
 chmod +x "$dest"
