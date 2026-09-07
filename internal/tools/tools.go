@@ -144,12 +144,12 @@ func Register(s *mcp.Server, svcs *service.Services) {
 
 	add(s, svcs, &mcp.Tool{
 		Name:        "scan_symbols",
-		Description: "Extract symbols from a file OR directory (path can be either). Filter with languages[], kinds[], name. Prefer outline_file for hierarchy of one file; find_usages before rename/delete. Default text is one-line summary.",
+		Description: "Extract symbols from a file OR directory (path can be either). Filter with languages[], kinds[], name. Prefer outline_file for hierarchy of one file; find_usages before rename/delete. Default text is one-line summary. On an indexed repo, pass repo_id instead of path: the index serves the query (source=indexed) without re-walking.",
 	}, handleScanSymbols)
 
 	add(s, svcs, &mcp.Tool{
 		Name:        "analyze_file",
-		Description: "Full dossier for one file in a single parse: metrics, per-kind stats, cyclomatic complexity, call graph. For directory-wide hotspots use rank_complexity instead of looping this tool. Next: get_text on complex functions.",
+		Description: "Full dossier for one file in a single parse: metrics, per-kind stats, cyclomatic complexity, call graph. For directory-wide hotspots use rank_complexity instead of looping this tool. Next: get_text on complex functions. On an indexed repo, pass repo_id+path: stale files are reindexed automatically (source=ast_fallback).",
 	}, handleAnalyzeFile)
 
 	add(s, svcs, &mcp.Tool{
@@ -159,17 +159,17 @@ func Register(s *mcp.Server, svcs *service.Services) {
 
 	add(s, svcs, &mcp.Tool{
 		Name:        "find_usages",
-		Description: "Find symbol usages in a directory. ALWAYS run before rename/delete. mode=occurrences (definition|call-site|import|reference), callers (counts), unused (heuristic), definitions, imports. group_by_file defaults true to keep payloads small. Prefer outline_file for one-file structure.",
+		Description: "Find symbol usages in a directory. ALWAYS run before rename/delete. mode=occurrences (definition|call-site|import|reference), callers (counts), unused (heuristic), definitions, imports. group_by_file defaults true to keep payloads small. Prefer outline_file for one-file structure. On an indexed repo, pass repo_id instead of path: occurrences and unused are served from the index (source=indexed), with cursor pagination via next_cursor.",
 	}, handleFindUsages)
 
 	add(s, svcs, &mcp.Tool{
 		Name:        "rank_complexity",
-		Description: "Rank functions/methods in a directory by cyclomatic complexity (top-N, default 20). Use BEFORE looping analyze_file on every file. Not a substitute for analyze_file when you need one file's call graph. Next: get_text on returned ranges.",
+		Description: "Rank functions/methods in a directory by cyclomatic complexity (top-N, default 20). Use BEFORE looping analyze_file on every file. Not a substitute for analyze_file when you need one file's call graph. Next: get_text on returned ranges. On an indexed repo, pass repo_id instead of path: uses pre-ranked hotspots (source=indexed).",
 	}, handleRankComplexity)
 
 	add(s, svcs, &mcp.Tool{
 		Name:         "outline_file",
-		Description:  "Hierarchical symbol outline for one file (types/classes → methods/fields) via range containment. Use for navigation without full AST cost. Prefer analyze_file for complexity/call graph; get_text for bodies.",
+		Description:  "Hierarchical symbol outline for one file (types/classes → methods/fields) via range containment. Use for navigation without full AST cost. Prefer analyze_file for complexity/call graph; get_text for bodies. On an indexed repo, pass repo_id+path: served from the index without text (source=indexed) or via a single-file reparse with include_text (source=ast_fallback).",
 		OutputSchema: outlineSchema,
 	}, handleOutlineFile)
 }
