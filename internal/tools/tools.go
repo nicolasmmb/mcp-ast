@@ -2,12 +2,14 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"mcp-ast/internal/engine"
+	"mcp-ast/internal/repoindex"
 	"mcp-ast/internal/service"
 )
 
@@ -90,6 +92,46 @@ func Register(s *mcp.Server, svcs *service.Services) {
 	}, handleListLanguages)
 
 	add(s, svcs, &mcp.Tool{
+		Name:        "index_repo",
+		Description: "Start indexing a repository in memory. Returns immediately; use repo_status until state is ready. Use repo_id with repo tools after indexing.",
+	}, handleIndexRepo)
+
+	add(s, svcs, &mcp.Tool{
+		Name:        "repo_status",
+		Description: "Get repository index state, file count, errors, version, and memory usage.",
+	}, handleRepoStatus)
+
+	add(s, svcs, &mcp.Tool{
+		Name:        "refresh_repo",
+		Description: "Rebuild a repository memory index in the background. Use repo_status until state is ready.",
+	}, handleRefreshRepo)
+
+	add(s, svcs, &mcp.Tool{
+		Name:        "drop_repo",
+		Description: "Remove a repository index from memory.",
+	}, handleDropRepo)
+
+	add(s, svcs, &mcp.Tool{
+		Name:        "search_repo",
+		Description: "Query an indexed repository. mode=usages requires name; mode=complexity returns indexed hotspots.",
+	}, handleSearchRepo)
+
+	add(s, svcs, &mcp.Tool{
+		Name:        "repo_impact",
+		Description: "Find dependants (reverse) or references (forward) of a symbol/file in an indexed call or import graph. depth 0 = transitive.",
+	}, handleRepoImpact)
+
+	add(s, svcs, &mcp.Tool{
+		Name:        "repo_cycles",
+		Description: "Find strongly connected components (cycles) in the indexed call or import graph.",
+	}, handleRepoCycles)
+
+	add(s, svcs, &mcp.Tool{
+		Name:        "repo_topology",
+		Description: "Condense the indexed graph into its SCC DAG and return layers in topological order.",
+	}, handleRepoTopology)
+
+	add(s, svcs, &mcp.Tool{
 		Name:         "parse_ast",
 		Description:  "Parse one source file and return its AST as recursive JSON. Use to explore grammar structure. Prefer query_ast or scan_symbols for extraction. Set max_depth (e.g. 5) on large files to keep output small. Next: use get_text with node ranges.",
 		OutputSchema: parseASTSchema,
@@ -140,6 +182,149 @@ type listLanguagesOutput struct {
 
 func handleListLanguages(_ context.Context, svcs *service.Services, _ listLanguagesInput) (*listLanguagesOutput, error) {
 	return &listLanguagesOutput{Languages: svcs.Engine.ListLanguages()}, nil
+}
+
+type indexRepoInput struct {
+	Path      string   `json:"path" jsonschema:"repository root directory"`
+	Languages []string `json:"languages,omitempty" jsonschema:"optional language filter"`
+}
+type repoStatusInput struct {
+	RepoID string `json:"repo_id" jsonschema:"repository index identifier"`
+}
+type refreshRepoInput struct {
+	RepoID    string   `json:"repo_id" jsonschema:"repository index identifier"`
+	Languages []string `json:"languages,omitempty" jsonschema:"optional language filter"`
+}
+type dropRepoInput struct {
+	RepoID string `json:"repo_id" jsonschema:"repository index identifier"`
+}
+type searchRepoInput struct {
+	RepoID string `json:"repo_id" jsonschema:"repository index identifier"`
+	Mode   string `json:"mode" jsonschema:"usages|complexity"`
+	Name   string `json:"name,omitempty" jsonschema:"symbol name; required for usages"`
+	Limit  int    `json:"limit,omitempty" jsonschema:"optional max results"`
+}
+type repoOutput struct {
+	Timed
+	serviceRepoInfo
+}
+
+// serviceRepoInfo keeps the storage package out of generated tool schemas.
+type serviceRepoInfo = repoindex.Info
+
+func handleIndexRepo(ctx context.Context, svcs *service.Services, in indexRepoInput) (*repoOutput, error) {
+	info, err := svcs.Repo.Index(ctx, in.Path, in.Languages)
+	if err != nil {
+		return nil, err
+	}
+	return &repoOutput{serviceRepoInfo: info}, nil
+}
+
+func handleRepoStatus(_ context.Context, svcs *service.Services, in repoStatusInput) (*repoOutput, error) {
+	info, err := svcs.Repo.Status(in.RepoID)
+	if err != nil {
+		return nil, err
+	}
+	return &repoOutput{serviceRepoInfo: info}, nil
+}
+
+func handleRefreshRepo(ctx context.Context, svcs *service.Services, in refreshRepoInput) (*repoOutput, error) {
+	info, err := svcs.Repo.Refresh(ctx, in.RepoID, in.Languages)
+	if err != nil {
+		return nil, err
+	}
+	return &repoOutput{serviceRepoInfo: info}, nil
+}
+
+func handleDropRepo(_ context.Context, svcs *service.Services, in dropRepoInput) (*repoOutput, error) {
+	if err := svcs.Repo.Drop(in.RepoID); err != nil {
+		return nil, err
+	}
+	return &repoOutput{}, nil
+}
+
+type searchRepoOutput struct {
+	Timed
+	Mode       string                    `json:"mode"`
+	Matches    []engine.UsageMatch       `json:"matches,omitempty"`
+	Complexity []engine.RankedComplexity `json:"complexity,omitempty"`
+}
+
+type impactInput struct {
+	RepoID    string `json:"repo_id" jsonschema:"repository index identifier"`
+	Graph     string `json:"graph" jsonschema:"calls|imports"`
+	Target    string `json:"target" jsonschema:"symbol or file name in the graph"`
+	Direction string `json:"direction,omitempty" jsonschema:"reverse (default) or forward"`
+	Depth     int    `json:"depth,omitempty" jsonschema:"0 = transitive"`
+	Limit     int    `json:"limit,omitempty" jsonschema:"optional max nodes"`
+}
+type impactOutput struct {
+	Timed
+	repoindex.ImpactResult
+}
+
+func handleRepoImpact(_ context.Context, svcs *service.Services, in impactInput) (*impactOutput, error) {
+	reverse := in.Direction != "forward"
+	res, err := svcs.Repo.Impact(in.RepoID, in.Graph, in.Target, reverse, in.Depth, in.Limit)
+	if err != nil {
+		return nil, err
+	}
+	return &impactOutput{ImpactResult: res}, nil
+}
+
+type graphQueryInput struct {
+	RepoID string `json:"repo_id" jsonschema:"repository index identifier"`
+	Graph  string `json:"graph" jsonschema:"calls|imports"`
+}
+type cyclesOutput struct {
+	Timed
+	Cycles [][]string `json:"cycles"`
+}
+
+func handleRepoCycles(_ context.Context, svcs *service.Services, in graphQueryInput) (*cyclesOutput, error) {
+	cycles, err := svcs.Repo.Cycles(in.RepoID, in.Graph)
+	if err != nil {
+		return nil, err
+	}
+	return &cyclesOutput{Cycles: cycles}, nil
+}
+
+type topologyOutput struct {
+	Timed
+	Layers [][]string `json:"layers"`
+}
+
+func handleRepoTopology(_ context.Context, svcs *service.Services, in graphQueryInput) (*topologyOutput, error) {
+	layers, err := svcs.Repo.Topology(in.RepoID, in.Graph)
+	if err != nil {
+		return nil, err
+	}
+	return &topologyOutput{Layers: layers}, nil
+}
+
+func handleSearchRepo(_ context.Context, svcs *service.Services, in searchRepoInput) (*searchRepoOutput, error) {
+	switch in.Mode {
+	case "usages":
+		if in.Name == "" {
+			return nil, fmt.Errorf("name is required for usages")
+		}
+		matches, err := svcs.Repo.Usages(in.RepoID, in.Name)
+		if err != nil {
+			return nil, err
+		}
+		if in.Limit > 0 && len(matches) > in.Limit {
+			matches = matches[:in.Limit]
+		}
+		return &searchRepoOutput{Mode: in.Mode, Matches: matches}, nil
+	case "complexity":
+		entries, err := svcs.Repo.Complexity(in.RepoID, in.Limit)
+		if err != nil {
+			return nil, err
+		}
+		return &searchRepoOutput{Mode: in.Mode, Complexity: entries}, nil
+	default:
+		return nil, fmt.Errorf("invalid search_repo mode %q", in.Mode)
+	}
 }
 
 type parseASTInput struct {
@@ -197,7 +382,8 @@ func handleQueryAST(_ context.Context, svcs *service.Services, in queryASTInput)
 }
 
 type scanSymbolsInput struct {
-	Path        string   `json:"path" jsonschema:"file or directory"`
+	Path        string   `json:"path,omitempty" jsonschema:"optional; file or directory"`
+	RepoID      string   `json:"repo_id,omitempty" jsonschema:"optional; query an indexed repository"`
 	Languages   []string `json:"languages,omitempty" jsonschema:"optional language filter"`
 	Kinds       []string `json:"kinds,omitempty" jsonschema:"optional symbol kinds"`
 	Name        string   `json:"name,omitempty" jsonschema:"optional exact name"`
@@ -210,6 +396,16 @@ type scanSymbolsOutput struct {
 }
 
 func handleScanSymbols(ctx context.Context, svcs *service.Services, in scanSymbolsInput) (*scanSymbolsOutput, error) {
+	if in.RepoID != "" {
+		res, err := svcs.Repo.Scan(in.RepoID, in.Languages, in.Kinds, in.Name, in.Limit)
+		if err != nil {
+			return nil, err
+		}
+		return &scanSymbolsOutput{ScanResult: *res}, nil
+	}
+	if in.Path == "" {
+		return nil, fmt.Errorf("path is required when repo_id is empty")
+	}
 	st, err := os.Stat(in.Path)
 	if err != nil {
 		return nil, err
@@ -282,7 +478,8 @@ func handleGetText(_ context.Context, svcs *service.Services, in getTextInput) (
 type findUsagesInput struct {
 	Mode        string   `json:"mode" jsonschema:"occurrences|callers|unused|definitions|imports"`
 	Name        string   `json:"name,omitempty" jsonschema:"symbol name; required except unused"`
-	Path        string   `json:"path" jsonschema:"directory to scan"`
+	Path        string   `json:"path,omitempty" jsonschema:"optional; directory to scan"`
+	RepoID      string   `json:"repo_id,omitempty" jsonschema:"optional; query an indexed repository"`
 	Languages   []string `json:"languages,omitempty" jsonschema:"optional language filter"`
 	Limit       int      `json:"limit,omitempty" jsonschema:"optional max results"`
 	GroupByFile *bool    `json:"group_by_file,omitempty" jsonschema:"optional; default true"`
@@ -294,6 +491,29 @@ type findUsagesOutput struct {
 }
 
 func handleFindUsages(ctx context.Context, svcs *service.Services, in findUsagesInput) (*findUsagesOutput, error) {
+	if in.RepoID != "" {
+		if in.Mode != string(service.FindOccurrences) {
+			return nil, fmt.Errorf("repo_id only supports mode=occurrences")
+		}
+		if in.Name == "" {
+			return nil, fmt.Errorf("name is required with repo_id")
+		}
+		group := true
+		if in.GroupByFile != nil {
+			group = *in.GroupByFile
+		}
+		res, err := svcs.Repo.FindUsages(in.RepoID, in.Name, service.FindQuery{
+			Mode: service.FindOccurrences, Name: in.Name, Dir: in.Path,
+			Limit: in.Limit, GroupByFile: group, Kinds: in.Kinds,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &findUsagesOutput{FindResult: *res}, nil
+	}
+	if in.Path == "" {
+		return nil, fmt.Errorf("path is required when repo_id is empty")
+	}
 	group := true
 	if in.GroupByFile != nil {
 		group = *in.GroupByFile
@@ -309,7 +529,8 @@ func handleFindUsages(ctx context.Context, svcs *service.Services, in findUsages
 }
 
 type rankComplexityInput struct {
-	Path      string   `json:"path" jsonschema:"directory to scan"`
+	Path      string   `json:"path,omitempty" jsonschema:"optional; directory to scan"`
+	RepoID    string   `json:"repo_id,omitempty" jsonschema:"optional; query an indexed repository"`
 	Languages []string `json:"languages,omitempty" jsonschema:"optional language filter"`
 	Limit     int      `json:"limit,omitempty" jsonschema:"optional; default 20"`
 }
@@ -322,6 +543,16 @@ func handleRankComplexity(ctx context.Context, svcs *service.Services, in rankCo
 	limit := in.Limit
 	if limit == 0 {
 		limit = 20
+	}
+	if in.RepoID != "" {
+		entries, err := svcs.Repo.Complexity(in.RepoID, limit)
+		if err != nil {
+			return nil, err
+		}
+		return &rankComplexityOutput{RankResult: service.RankResult{Language: "indexed", Entries: entries}}, nil
+	}
+	if in.Path == "" {
+		return nil, fmt.Errorf("path is required when repo_id is empty")
 	}
 	res, err := svcs.Rank.ComplexityDir(ctx, in.Path, in.Languages, limit)
 	if err != nil {

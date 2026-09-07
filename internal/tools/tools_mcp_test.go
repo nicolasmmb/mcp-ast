@@ -132,14 +132,16 @@ func TestMCP_ToolsList_NineTools(t *testing.T) {
 	want := []string{
 		"list_languages", "parse_ast", "query_ast", "scan_symbols",
 		"analyze_file", "get_text", "find_usages", "rank_complexity", "outline_file",
+		"index_repo", "repo_status", "refresh_repo", "drop_repo",
+		"search_repo", "repo_impact", "repo_cycles", "repo_topology",
 	}
 	for _, n := range want {
 		if !names[n] {
 			t.Errorf("missing tool %q; got %v", n, names)
 		}
 	}
-	if len(names) != 9 {
-		t.Errorf("want 9 tools, got %d: %v", len(names), names)
+	if len(names) != len(want) {
+		t.Errorf("want %d tools, got %d: %v", len(want), len(names), names)
 	}
 	for _, legacy := range []string{"parse_ast_file", "usages_dir", "callers_dir", "symbols_file", "get_text_file"} {
 		if names[legacy] {

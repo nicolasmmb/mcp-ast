@@ -9,6 +9,7 @@ import (
 
 	"mcp-ast/internal/engine"
 	"mcp-ast/internal/lang"
+	"mcp-ast/internal/repoindex"
 )
 
 // Services aggregates one service per domain. Engine hosts the raw stateless
@@ -22,9 +23,14 @@ type Services struct {
 	Calls  *CallsService
 	Find   *FindService
 	Rank   *RankService
+	Repo   *RepoService
 }
 
 func New(e *engine.Engine) *Services {
+	return NewWithStore(e, repoindex.NewMemory(1024<<20))
+}
+
+func NewWithStore(e *engine.Engine, store repoindex.Store) *Services {
 	return &Services{
 		Engine: e,
 		Scan:   &ScanService{eng: e},
@@ -34,6 +40,7 @@ func New(e *engine.Engine) *Services {
 		Calls:  &CallsService{eng: e},
 		Find:   &FindService{eng: e},
 		Rank:   &RankService{eng: e},
+		Repo:   &RepoService{eng: e, store: store},
 	}
 }
 

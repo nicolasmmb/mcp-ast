@@ -13,6 +13,7 @@ import (
 // UsageMatch is one occurrence of a symbol name, classified by role.
 type UsageMatch struct {
 	File   string `json:"file"`
+	Name   string `json:"name,omitempty"`
 	Line   int    `json:"line"`
 	Col    int    `json:"col"`
 	Text   string `json:"text"`
@@ -49,17 +50,22 @@ func (e *Engine) Usages(ctx context.Context, dir, name string, filter lang.Langu
 }
 
 func (e *Engine) classifyUsages(l lang.Language, path, name string) ([]UsageMatch, error) {
-	if _, ok := l.AuxQueries()["identifiers"]; !ok {
-		return nil, nil
-	}
 	src, tree, err := e.parseFile(l, path)
 	if err != nil {
 		return nil, err
 	}
 	defer tree.Close()
-	root := tree.RootNode()
-	defPos := e.definitionPositions(l, root, src, name)
-	callPos := e.callPositions(l, root, src, name)
+	return e.classifyUsagesTree(l, path, src, tree.RootNode(), name, false)
+}
+
+// classifyUsagesTree classifies identifier captures from an already parsed tree.
+// When all is false, it returns only occurrences of name.
+func (e *Engine) classifyUsagesTree(l lang.Language, path string, src []byte, root *ts.Node, name string, all bool) ([]UsageMatch, error) {
+	if _, ok := l.AuxQueries()["identifiers"]; !ok {
+		return []UsageMatch{}, nil
+	}
+	defPos := e.definitionPositions(l, root, src)
+	callPos := e.callPositions(l, root, src)
 	cq, ok := e.reg.Compiled(l, lang.AuxKey("identifiers"))
 	if !ok {
 		return nil, fmt.Errorf("compiled identifier query not found for %s", l.Name())
@@ -70,12 +76,13 @@ func (e *Engine) classifyUsages(l lang.Language, path, name string) ([]UsageMatc
 	matches := make([]UsageMatch, 0, 8)
 	for m := it.Next(); m != nil; m = it.Next() {
 		for _, cap := range m.Captures {
-			if cap.Node.Utf8Text(src) != name {
+			if !all && cap.Node.Utf8Text(src) != name {
 				continue
 			}
 			start := point(cap.Node.StartPosition())
 			match := UsageMatch{
 				File: path,
+				Name: cap.Node.Utf8Text(src),
 				Line: start.Row + 1,
 				Col:  start.Col,
 				Text: firstLine(cap.Node.Parent().Utf8Text(src)),
@@ -93,9 +100,9 @@ func (e *Engine) classifyUsages(l lang.Language, path, name string) ([]UsageMatc
 	return matches, nil
 }
 
-// definitionPositions collects the start positions of every declaration of
-// name in the file, from the @name captures of the symbol queries.
-func (e *Engine) definitionPositions(l lang.Language, root *ts.Node, src []byte, name string) map[Point]bool {
+// definitionPositions collects every declaration's start position from the
+// @name captures of the symbol queries.
+func (e *Engine) definitionPositions(l lang.Language, root *ts.Node, src []byte) map[Point]bool {
 	defPos := make(map[Point]bool)
 	for kind := range l.SymbolQueries() {
 		cq, ok := e.reg.Compiled(l, lang.SymbolKey(kind))
@@ -106,7 +113,7 @@ func (e *Engine) definitionPositions(l lang.Language, root *ts.Node, src []byte,
 		it := c.Matches(cq.Q, root, src)
 		for m := it.Next(); m != nil; m = it.Next() {
 			for _, cap := range m.Captures {
-				if cq.Names[cap.Index] == "name" && cap.Node.Utf8Text(src) == name {
+				if cq.Names[cap.Index] == "name" {
 					defPos[point(cap.Node.StartPosition())] = true
 				}
 			}
@@ -116,9 +123,8 @@ func (e *Engine) definitionPositions(l lang.Language, root *ts.Node, src []byte,
 	return defPos
 }
 
-// callPositions maps the start position of every callee equal to target to the
-// name of the function containing that call, using the language's calls query.
-func (e *Engine) callPositions(l lang.Language, root *ts.Node, src []byte, target string) map[Point]string {
+// callPositions maps every callee's start position to its containing function.
+func (e *Engine) callPositions(l lang.Language, root *ts.Node, src []byte) map[Point]string {
 	out := make(map[Point]string)
 	if _, ok := l.AuxQueries()["calls"]; !ok {
 		return out
@@ -135,18 +141,19 @@ func (e *Engine) callPositions(l lang.Language, root *ts.Node, src []byte, targe
 	defer c.Close()
 	it := c.Matches(cq.Q, root, src)
 	for m := it.Next(); m != nil; m = it.Next() {
-		var callee string
 		var pos Point
+		found := false
 		for _, cap := range m.Captures {
 			if cq.Names[cap.Index] == "callee" {
-				callee = cap.Node.Utf8Text(src)
 				pos = point(cap.Node.StartPosition())
+				found = true
 			}
 		}
-		if callee != target {
-			continue
-		}
-		if idx := findFunc(funcs, pos); idx >= 0 {
+		if found {
+			idx := findFunc(funcs, pos)
+			if idx < 0 {
+				continue
+			}
 			out[pos] = funcs[idx].Name
 		}
 	}

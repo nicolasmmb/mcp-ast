@@ -14,15 +14,16 @@ import (
 
 	"mcp-ast/internal/engine"
 	"mcp-ast/internal/lang"
-	golanglang "mcp-ast/internal/languages/go"
-	"mcp-ast/internal/languages/java"
 	"mcp-ast/internal/languages/bash"
 	"mcp-ast/internal/languages/csharp"
+	golanglang "mcp-ast/internal/languages/go"
+	"mcp-ast/internal/languages/java"
 	"mcp-ast/internal/languages/javascript"
 	"mcp-ast/internal/languages/python"
 	"mcp-ast/internal/languages/rust"
 	"mcp-ast/internal/languages/typescript"
 	"mcp-ast/internal/languages/yaml"
+	"mcp-ast/internal/repoindex"
 	"mcp-ast/internal/service"
 	"mcp-ast/internal/tools"
 )
@@ -35,6 +36,7 @@ func main() {
 	verbose := flag.Bool("verbose", false, "log debug output to stderr")
 	logPath := flag.String("log", "", "write log to file (append)")
 	showVersion := flag.Bool("version", false, "print version and exit")
+	maxMemory := flag.String("max-memory", "auto", "repository index memory limit in MB, or auto")
 	flag.Parse()
 
 	if *showVersion {
@@ -42,6 +44,10 @@ func main() {
 		return
 	}
 	tools.SetToolTimeout(*timeout)
+	memoryLimit, err := repoindex.ParseMemoryLimit(*maxMemory)
+	if err != nil {
+		log.Fatalf("invalid -max-memory: %v", err)
+	}
 
 	logger, closeLog := newLogger(*verbose, *logPath)
 	if closeLog != nil {
@@ -58,7 +64,7 @@ func main() {
 	logger.Info("started", "version", version, "tool_timeout", timeout.String(), "languages", reg.List(), "log", *logPath)
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "ast-mcp", Version: version}, nil)
-	tools.Register(server, service.New(engine.New(reg)))
+	tools.Register(server, service.NewWithStore(engine.New(reg), repoindex.NewMemory(memoryLimit)))
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		log.Fatal(err)

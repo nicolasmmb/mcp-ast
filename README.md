@@ -16,6 +16,14 @@ Analisa arquivos e diretórios e expõe **9 tools** por stdio
 | `find_usages` | diretório | occurrences / callers / unused / definitions / imports |
 | `rank_complexity` | diretório | Top-N complexidade ciclomática |
 | `outline_file` | arquivo | Árvore hierárquica de símbolos |
+| `index_repo` | repositório | Indexa um repo em RAM (assíncrono) |
+| `repo_status` | repositório | Estado do índice: arquivos, versão, memória |
+| `refresh_repo` | repositório | Reindexa um repo em background |
+| `drop_repo` | repositório | Remove índice da memória |
+| `search_repo` | repositório | Consulta indexada: usages / complexity |
+| `repo_impact` | repositório | Quem depende (reverse) ou referencia (forward) um símbolo/arquivo |
+| `repo_cycles` | repositório | SCCs/ciclos do grafo de calls ou imports |
+| `repo_topology` | repositório | DAG condensado (SCC) do grafo, em camadas topológicas |
 
 ### Migração (breaking)
 
@@ -97,7 +105,23 @@ Queries são pré-compiladas no `Register` (fail-fast). O registry mantém `Comp
 ## Como usar o MCP
 
 O servidor fala **MCP por stdio**: lê mensagens JSON-RPC da entrada padrão e responde na saída padrão.
-Qualquer cliente MCP (agente, editor, CLI) que o execute como processo local ganha as 9 tools automaticamente.
+Qualquer cliente MCP (agente, editor, CLI) que o execute como processo local ganha as tools automaticamente.
+
+### Repo mode (índice em RAM)
+
+`index_repo` indexa um repositório uma vez (símbolos, usages, complexidade) e retorna um `repo_id`. Consultas subsequentes com `repo_id` usam o índice, sem novo walk/parse global:
+
+```json
+{"repo_id": "repo_1", "mode": "occurrences", "name": "walkFiles"}
+```
+
+Todas as tools de diretório (`scan_symbols`, `find_usages`, `rank_complexity`) aceitam `repo_id` opcional; sem ele mantêm o comportamento direto anterior. `repo_status` mostra progresso, arquivos indexados e memória usada; `refresh_repo` reindexa em background; `drop_repo` libera o índice.
+
+O índice também mantém o **call graph** (função → função, a partir dos call-sites) e o **import graph** (arquivo → specifier, com resolução local de imports relativos). Os grafos são direcionados gerais (podem ter ciclos); `repo_cycles` roda Tarjan e `repo_topology` condensa os SCCs em um DAG por camadas.
+
+`refresh_repo` é **incremental**: compara `size`+`mtime` (e de-bounce por SHA-256) de cada arquivo, reindexa só o delta e aplica atomicamente. Deltas > 20% dos arquivos (ou > 500) disparam rebuild completo em background.
+
+O orçamento de memória do índice é automático (25% da RAM disponível, entre 256 MB e 4 GB) ou explícito: `ast-mcp -max-memory=2048mb`. Acima do orçamento o índice entra em estado `partial`.
 
 ### 1. Obtenha o binário
 

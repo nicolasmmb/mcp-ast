@@ -21,6 +21,10 @@ cmd/ast-mcp/main.go          → CLI + bootstrap MCP server
   │     scan.go              → ScanService: varredura multi-lang + poda genérica kinds/name
   │     file.go              → FileAnalysisService: dossiê do arquivo + símbolos
   │     usages.go / unused.go / calls.go → wrappers com merge multi-linguagem
+  │     repo.go              → RepoService: indexação/refresh/consulta de repositório
+  ├── internal/repoindex/    → Boundary de armazenamento do índice
+  │     store.go             → Store interface + MemoryStore (RAM, postings por arquivo, Apply delta)
+  │     graph.go             → call/import graphs + Tarjan/SCC + DAG condensado + impacto
   └── internal/tools/        → Camada MCP (2 arquivos)
         tools.go             → Tabela declarativa das 10 tools via add[In, Out] genérico
         timing.go            → Wrapper de timeout + elapsed_ms + logging
