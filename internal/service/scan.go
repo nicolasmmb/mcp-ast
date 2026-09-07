@@ -103,3 +103,19 @@ func kindSet(kinds []string) map[string]bool {
 	}
 	return set
 }
+
+// Path extracts symbols from a single file (scan_symbols when path is a file).
+func (s *ScanService) Path(langName, path string, includeText bool) (*ScanResult, error) {
+	l, err := s.eng.Resolve(langName, path)
+	if err != nil {
+		return nil, err
+	}
+	syms, err := s.eng.SymbolsText(l, path, includeText)
+	if err != nil {
+		return nil, err
+	}
+	return &ScanResult{
+		Language: l.Name(),
+		Files:    map[string]map[string][]engine.Symbol{path: syms},
+	}, nil
+}

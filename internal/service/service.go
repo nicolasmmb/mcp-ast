@@ -20,6 +20,8 @@ type Services struct {
 	Usages *UsagesService
 	Unused *UnusedService
 	Calls  *CallsService
+	Find   *FindService
+	Rank   *RankService
 }
 
 func New(e *engine.Engine) *Services {
@@ -30,6 +32,8 @@ func New(e *engine.Engine) *Services {
 		Usages: &UsagesService{eng: e},
 		Unused: &UnusedService{eng: e},
 		Calls:  &CallsService{eng: e},
+		Find:   &FindService{eng: e},
+		Rank:   &RankService{eng: e},
 	}
 }
 

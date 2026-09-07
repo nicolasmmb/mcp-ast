@@ -1,0 +1,5 @@
+name: sample
+services:
+  api:
+    image: app:latest
+version: "3"

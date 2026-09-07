@@ -45,7 +45,10 @@ func (JavaScript) DecisionKinds() []string {
 func (JavaScript) AuxQueries() map[string]string {
 	return map[string]string{
 		"identifiers": `[(identifier) (property_identifier) (private_property_identifier)] @id`,
-		"calls":       `(call_expression function: [(identifier) (member_expression (property_identifier))] @callee)`,
+		"calls": `[
+			(call_expression function: (identifier) @callee)
+			(call_expression function: (member_expression property: (property_identifier) @callee))
+		]`,
 	}
 }
 

@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 
 	"mcp-ast/internal/lang"
 )
@@ -68,7 +70,8 @@ func (e *Engine) SymbolsText(l lang.Language, path string, fullText bool) (map[s
 	defer tree.Close()
 	out := make(map[string][]Symbol)
 	for kind, qs := range l.SymbolQueries() {
-		matches, err := e.runQuery(l, src, tree.RootNode(), qs, 0, fullText)
+		_ = qs
+		matches, err := e.runCompiledQuery(l, src, tree.RootNode(), lang.SymbolKey(kind), 0, fullText)
 		if err != nil {
 			return nil, fmt.Errorf("symbol query %q: %w", kind, err)
 		}
@@ -101,12 +104,15 @@ func (e *Engine) SymbolsText(l lang.Language, path string, fullText bool) (map[s
 // ctx cancels the walk (e.g. tool-call timeout); on cancel it returns ctx.Err.
 func (e *Engine) ScanSymbols(ctx context.Context, dir string, filter lang.Language, fullText bool) (map[string]map[string][]Symbol, map[string]string, error) {
 	files := make(map[string]map[string][]Symbol)
+	var mu sync.Mutex
 	errs, err := e.walkFiles(ctx, dir, filter, func(path string, l lang.Language) error {
 		syms, err := e.SymbolsText(l, path, fullText)
 		if err != nil {
 			return err
 		}
+		mu.Lock()
 		files[path] = syms
+		mu.Unlock()
 		return nil
 	})
 	if err != nil {
@@ -122,6 +128,11 @@ func (e *Engine) ScanSymbols(ctx context.Context, dir string, filter lang.Langua
 // walk-level errors (e.g. ctx cancellation) are returned.
 func (e *Engine) walkFiles(ctx context.Context, dir string, filter lang.Language, fn func(path string, l lang.Language) error) (map[string]string, error) {
 	errs := make(map[string]string)
+	type fileTask struct {
+		path string
+		lang lang.Language
+	}
+	tasks := make([]fileTask, 0, 64)
 	walk := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -148,13 +159,51 @@ func (e *Engine) walkFiles(ctx context.Context, dir string, filter lang.Language
 			}
 			l = ll
 		}
-		if err := fn(path, l); err != nil {
-			errs[path] = err.Error()
-		}
+		tasks = append(tasks, fileTask{path: path, lang: l})
 		return nil
 	})
 	if err := walk; err != nil {
 		return nil, err
+	}
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 2 {
+		workers = 2
+	} else if workers > 16 {
+		workers = 16
+	}
+	jobs := make(chan fileTask)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	worker := func() {
+		defer wg.Done()
+		for t := range jobs {
+			if ctx.Err() != nil {
+				return
+			}
+			if err := fn(t.path, t.lang); err != nil {
+				mu.Lock()
+				errs[t.path] = err.Error()
+				mu.Unlock()
+			}
+		}
+	}
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go worker()
+	}
+	for _, t := range tasks {
+		select {
+		case <-ctx.Done():
+			close(jobs)
+			wg.Wait()
+			return nil, ctx.Err()
+		case jobs <- t:
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
 	return errs, nil
 }

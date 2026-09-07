@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	ts "github.com/tree-sitter/go-tree-sitter"
 
@@ -27,8 +28,9 @@ type UsageMatch struct {
 // parsed even past the limit.
 func (e *Engine) Usages(ctx context.Context, dir, name string, filter lang.Language, limit int) ([]UsageMatch, map[string]string, error) {
 	matches := []UsageMatch{}
+	var mu sync.Mutex
 	errs, err := e.walkFiles(ctx, dir, filter, func(path string, l lang.Language) error {
-		qs, ok := l.AuxQueries()["identifiers"]
+		_, ok := l.AuxQueries()["identifiers"]
 		if !ok {
 			return nil
 		}
@@ -38,16 +40,16 @@ func (e *Engine) Usages(ctx context.Context, dir, name string, filter lang.Langu
 		}
 		defer tree.Close()
 		root := tree.RootNode()
-		defPos := definitionPositions(l, root, src, name)
-		callPos := callPositions(l, root, src, name)
-		q, qerr := ts.NewQuery(l.Language(), qs)
-		if qerr != nil {
-			return fmt.Errorf("invalid identifier query: %s", qerr.Message)
+		defPos := e.definitionPositions(l, root, src, name)
+		callPos := e.callPositions(l, root, src, name)
+		cq, ok := e.reg.Compiled(l, lang.AuxKey("identifiers"))
+		if !ok {
+			return fmt.Errorf("compiled identifier query not found for %s", l.Name())
 		}
-		defer q.Close()
 		c := ts.NewQueryCursor()
 		defer c.Close()
-		it := c.Matches(q, root, src)
+		it := c.Matches(cq.Q, root, src)
+		fileMatches := make([]UsageMatch, 0, 8)
 		for m := it.Next(); m != nil; m = it.Next() {
 			for _, cap := range m.Captures {
 				if cap.Node.Utf8Text(src) != name {
@@ -70,9 +72,12 @@ func (e *Engine) Usages(ctx context.Context, dir, name string, filter lang.Langu
 						u.Kind = "reference"
 					}
 				}
-				matches = append(matches, u)
+				fileMatches = append(fileMatches, u)
 			}
 		}
+		mu.Lock()
+		matches = append(matches, fileMatches...)
+		mu.Unlock()
 		return nil
 	})
 	if err != nil {
@@ -86,55 +91,50 @@ func (e *Engine) Usages(ctx context.Context, dir, name string, filter lang.Langu
 
 // definitionPositions collects the start positions of every declaration of
 // name in the file, from the @name captures of the symbol queries.
-func definitionPositions(l lang.Language, root *ts.Node, src []byte, name string) map[Point]bool {
+func (e *Engine) definitionPositions(l lang.Language, root *ts.Node, src []byte, name string) map[Point]bool {
 	defPos := make(map[Point]bool)
-	for _, sq := range l.SymbolQueries() {
-		q, qerr := ts.NewQuery(l.Language(), sq)
-		if qerr != nil {
+	for kind := range l.SymbolQueries() {
+		cq, ok := e.reg.Compiled(l, lang.SymbolKey(kind))
+		if !ok {
 			continue
 		}
-		names := q.CaptureNames()
 		c := ts.NewQueryCursor()
-		it := c.Matches(q, root, src)
+		it := c.Matches(cq.Q, root, src)
 		for m := it.Next(); m != nil; m = it.Next() {
 			for _, cap := range m.Captures {
-				if names[cap.Index] == "name" && cap.Node.Utf8Text(src) == name {
+				if cq.Names[cap.Index] == "name" && cap.Node.Utf8Text(src) == name {
 					defPos[point(cap.Node.StartPosition())] = true
 				}
 			}
 		}
 		c.Close()
-		q.Close()
 	}
 	return defPos
 }
 
 // callPositions maps the start position of every callee equal to target to the
 // name of the function containing that call, using the language's calls query.
-func callPositions(l lang.Language, root *ts.Node, src []byte, target string) map[Point]string {
+func (e *Engine) callPositions(l lang.Language, root *ts.Node, src []byte, target string) map[Point]string {
 	out := make(map[Point]string)
-	qs, ok := l.AuxQueries()["calls"]
-	if !ok {
+	if _, ok := l.AuxQueries()["calls"]; !ok {
 		return out
 	}
-	funcs := functionRanges(l, root, src)
+	funcs := e.functionRanges(l, root, src)
 	if len(funcs) == 0 {
 		return out
 	}
-	q, qerr := ts.NewQuery(l.Language(), qs)
-	if qerr != nil {
+	cq, ok := e.reg.Compiled(l, lang.AuxKey("calls"))
+	if !ok {
 		return out
 	}
-	defer q.Close()
-	names := q.CaptureNames()
 	c := ts.NewQueryCursor()
 	defer c.Close()
-	it := c.Matches(q, root, src)
+	it := c.Matches(cq.Q, root, src)
 	for m := it.Next(); m != nil; m = it.Next() {
 		var callee string
 		var pos Point
 		for _, cap := range m.Captures {
-			if names[cap.Index] == "callee" {
+			if cq.Names[cap.Index] == "callee" {
 				callee = cap.Node.Utf8Text(src)
 				pos = point(cap.Node.StartPosition())
 			}

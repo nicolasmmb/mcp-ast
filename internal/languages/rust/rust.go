@@ -47,7 +47,11 @@ func (Rust) DecisionKinds() []string {
 func (Rust) AuxQueries() map[string]string {
 	return map[string]string{
 		"identifiers": `[(identifier) (type_identifier) (field_identifier) (scoped_identifier)] @id`,
-		"calls":       `(call_expression function: [(identifier) (field_identifier) (scoped_identifier)] @callee)`,
+		"calls": `[
+			(call_expression function: (identifier) @callee)
+			(call_expression function: (field_expression field: (field_identifier) @callee))
+			(call_expression function: (scoped_identifier) @callee)
+		]`,
 	}
 }
 

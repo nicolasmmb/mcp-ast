@@ -20,7 +20,7 @@ func (Bash) Language() *ts.Language {
 func (Bash) SymbolQueries() map[string]string {
 	return map[string]string{
 		"functions": `(function_definition name: (word) @name) @symbol`,
-		"variables": `(variable_assignment variable: (variable_name) @name) @symbol`,
+		"variables": `(variable_assignment (variable_name) @name) @symbol`,
 	}
 }
 
@@ -36,7 +36,7 @@ func (Bash) DecisionKinds() []string {
 		"pipeline",
 		"command_substitution",
 		"test_command",
-		"binary_expression", // only counts when the operator is && or ||
+		"binary_expression",
 	}
 }
 
