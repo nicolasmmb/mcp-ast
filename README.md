@@ -184,6 +184,13 @@ explícito: `ast-mcp -max-memory=2048mb`. Acima do orçamento o índice entra em
 `partial`. Postings internos usam IDs interning (`FileID`/`NameID`), sem strings
 repetidas por ocorrência.
 
+**Persistência entre reinícios.** Ao final de cada build/refresh, o índice é salvo
+como snapshot compacto (formato próprio, sem ASTs) em `~/.cache/ast-mcp` (ou
+`-cache-dir`). No próximo boot, `index_repo` restaura o snapshot em vez de reindexar
+(`repo_status.restored: true`) e roda um refresh incremental para capturar mudanças
+no disco. O snapshot é invalidado quando o root, o schema, as linguagens ou a versão
+do binário mudam.
+
 ### O que consulta o disco vs. o índice
 
 | Tool | Com `repo_id` | Sem `repo_id` |

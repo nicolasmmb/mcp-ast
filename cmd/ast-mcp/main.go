@@ -39,6 +39,7 @@ func main() {
 	maxMemory := flag.String("max-memory", "auto", "repository index memory limit in MB, or auto")
 	watch := flag.Bool("watch", false, "keep repository indexes fresh automatically (polling)")
 	watchInterval := flag.Duration("watch-interval", 5*time.Second, "watch poll interval")
+	cacheDir := flag.String("cache-dir", "", "snapshot cache directory (default: user cache)")
 	flag.Parse()
 
 	if *showVersion {
@@ -67,6 +68,10 @@ func main() {
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "ast-mcp", Version: version}, nil)
 	svcs := service.NewWithStore(engine.New(reg), repoindex.NewMemory(memoryLimit))
+	svcs.Repo.SetToolVersion(version)
+	if *cacheDir != "" {
+		svcs.Repo.SetCacheDir(*cacheDir)
+	}
 	if *watch {
 		svcs.Repo.SetWatchInterval(*watchInterval)
 	}

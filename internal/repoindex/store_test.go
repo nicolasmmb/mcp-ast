@@ -1,6 +1,7 @@
 package repoindex
 
 import (
+	"path/filepath"
 	"testing"
 	"unsafe"
 
@@ -217,6 +218,33 @@ func TestMemoryStoreApplyErrors(t *testing.T) {
 	}
 	if info.Errors != 0 {
 		t.Fatalf("error should clear after successful update: %#v", info)
+	}
+}
+
+func TestSnapshotRoundtrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sub", "repo.gob")
+	snap := &Snapshot{
+		Header: SnapshotHeader{SchemaVersion: SnapshotSchemaVersion, ToolVersion: "v1", Root: "/repo", Languages: "go"},
+		Files:  map[string]IndexedFile{"/repo/a.go": fileFacts("/repo/a.go", "go")},
+	}
+	if err := SaveSnapshot(path, snap); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadSnapshot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.Header.Valid(SnapshotSchemaVersion, "v1", "/repo", "go") {
+		t.Fatalf("header invalid: %#v", loaded.Header)
+	}
+	if loaded.Header.Valid(SnapshotSchemaVersion, "v2", "/repo", "go") {
+		t.Fatal("different tool version must invalidate")
+	}
+	if loaded.Files["/repo/a.go"].Facts.Language != "go" {
+		t.Fatalf("facts lost: %#v", loaded.Files)
+	}
+	if _, err := LoadSnapshot(path + ".missing"); err == nil {
+		t.Fatal("missing snapshot must error")
 	}
 }
 

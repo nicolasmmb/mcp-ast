@@ -3,11 +3,13 @@ package service
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,7 +26,31 @@ type RepoService struct {
 	store         repoindex.Store
 	refreshLocks  sync.Map // repo id -> *sync.Mutex (refresh coalescing)
 	watchLangs    sync.Map // repo id -> languages used at index time
+	snapshotLangs sync.Map // repo id -> languages (snapshot header)
 	watchInterval time.Duration
+	toolVersion   string
+	cacheDir      string
+	snapshotMu    sync.Mutex
+}
+
+// SetToolVersion enables snapshot persistence: snapshots are only saved and
+// restored when the tool version is known (non-empty).
+func (s *RepoService) SetToolVersion(v string) { s.toolVersion = v }
+
+// SetCacheDir overrides the snapshot directory (default: user cache).
+func (s *RepoService) SetCacheDir(dir string) { s.cacheDir = dir }
+
+func (s *RepoService) snapshotPath(root string) string {
+	dir := s.cacheDir
+	if dir == "" {
+		if base, err := os.UserCacheDir(); err == nil {
+			dir = filepath.Join(base, "ast-mcp")
+		} else {
+			dir = filepath.Join(os.TempDir(), "ast-mcp-cache")
+		}
+	}
+	sum := sha256.Sum256([]byte(root))
+	return filepath.Join(dir, "repo-"+hex.EncodeToString(sum[:8])+".gob")
 }
 
 // SetWatchInterval enables the polling watcher when interval > 0. Watching
@@ -51,6 +77,23 @@ func (s *RepoService) Index(ctx context.Context, dir string, languages []string)
 		return repoindex.Info{}, err
 	}
 	info := s.store.Create(root)
+	path := s.snapshotPath(root)
+	langsKey := strings.Join(languages, ",")
+	s.snapshotLangs.Store(info.ID, languages)
+	if s.toolVersion != "" {
+		if snap, err := repoindex.LoadSnapshot(path); err == nil &&
+			snap.Header.Valid(repoindex.SnapshotSchemaVersion, s.toolVersion, root, langsKey) {
+			if _, err := s.store.Replace(info.ID, snap.Files, nil); err == nil {
+				info, _ = s.store.SetCache(info.ID, true, path)
+				if s.watchInterval > 0 {
+					_, _ = s.store.SetWatch(info.ID, true)
+					s.startWatch(info.ID, languages)
+				}
+				go func() { _, _ = s.Refresh(context.Background(), info.ID, languages) }()
+				return info, nil
+			}
+		}
+	}
 	go s.build(context.WithoutCancel(ctx), info.ID, root, filters)
 	if s.watchInterval > 0 {
 		_, _ = s.store.SetWatch(info.ID, true)
@@ -115,6 +158,37 @@ func (s *RepoService) build(ctx context.Context, id, root string, filters []lang
 		}
 	}
 	_, _ = s.store.Replace(id, files, errs)
+	s.saveSnapshot(id)
+}
+
+// saveSnapshot persists the current index state in the background when
+// persistence is enabled. The file write is atomic and serialized.
+func (s *RepoService) saveSnapshot(id string) {
+	if s.toolVersion == "" {
+		return
+	}
+	info, ok := s.store.Info(id)
+	if !ok {
+		return
+	}
+	meta, ok := s.store.Meta(id)
+	if !ok {
+		return
+	}
+	langs, _ := s.snapshotLangs.Load(id)
+	names, _ := langs.([]string)
+	snap := &repoindex.Snapshot{
+		Header: repoindex.SnapshotHeader{
+			SchemaVersion: repoindex.SnapshotSchemaVersion,
+			ToolVersion:   s.toolVersion,
+			Root:          info.Root,
+			Languages:     strings.Join(names, ","),
+		},
+		Files: meta,
+	}
+	s.snapshotMu.Lock()
+	defer s.snapshotMu.Unlock()
+	_ = repoindex.SaveSnapshot(s.snapshotPath(info.Root), snap)
 }
 
 // loadIndexed attaches size, mtime and sha256 to a file's facts. Unreadable
@@ -208,7 +282,12 @@ func (s *RepoService) Refresh(ctx context.Context, id string, languages []string
 			cs.Updated[p] = indexed
 		}
 	}
-	return s.store.Apply(id, cs)
+	info, err = s.store.Apply(id, cs)
+	if err != nil {
+		return repoindex.Info{}, err
+	}
+	s.saveSnapshot(id)
+	return info, nil
 }
 
 // indexPath parses a single file into indexed facts with fresh metadata. A

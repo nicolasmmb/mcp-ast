@@ -440,6 +440,133 @@ func TestRepoServiceWatch(t *testing.T) {
 	}
 }
 
+func waitSnapshot(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := repoindex.LoadSnapshot(path); err == nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("snapshot %s never written", path)
+}
+
+func TestRepoServiceRestoreOnBoot(t *testing.T) {
+	cacheDir := t.TempDir()
+	dir, mainPath, _ := writeFixture(t)
+
+	svcs1 := testRepoServices(t, 1<<30)
+	svcs1.Repo.SetToolVersion("test-v1")
+	svcs1.Repo.SetCacheDir(cacheDir)
+	info, err := svcs1.Repo.Index(context.Background(), dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitReady(t, svcs1, info.ID)
+	waitSnapshot(t, svcs1.Repo.snapshotPath(mustAbs(t, dir)))
+	st1, err := svcs1.Repo.Status(info.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st1.Restored {
+		t.Fatal("first boot must build, not restore")
+	}
+
+	// second boot: a fresh process (new store) must restore without re-parse
+	svcs2 := testRepoServices(t, 1<<30)
+	svcs2.Repo.SetToolVersion("test-v1")
+	svcs2.Repo.SetCacheDir(cacheDir)
+	info2, err := svcs2.Repo.Index(context.Background(), dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitReady(t, svcs2, info2.ID)
+	st2, err := svcs2.Repo.Status(info2.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st2.Restored || st2.Files != 2 {
+		t.Fatalf("second boot must restore: %#v", st2)
+	}
+	usages, err := svcs2.Repo.Usages(info2.ID, "Helper")
+	if err != nil || len(usages) < 4 {
+		t.Fatalf("restored index must answer queries: %#v %v", usages, err)
+	}
+
+	// different tool version invalidates the snapshot
+	svcs3 := testRepoServices(t, 1<<30)
+	svcs3.Repo.SetToolVersion("test-v2")
+	svcs3.Repo.SetCacheDir(cacheDir)
+	info3, err := svcs3.Repo.Index(context.Background(), dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitReady(t, svcs3, info3.ID)
+	st3, err := svcs3.Repo.Status(info3.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st3.Restored {
+		t.Fatal("different tool version must rebuild, not restore")
+	}
+	_ = mainPath
+}
+
+func TestRepoServiceRestoreStaleFile(t *testing.T) {
+	cacheDir := t.TempDir()
+	dir, mainPath, _ := writeFixture(t)
+
+	svcs1 := testRepoServices(t, 1<<30)
+	svcs1.Repo.SetToolVersion("test-v1")
+	svcs1.Repo.SetCacheDir(cacheDir)
+	info, err := svcs1.Repo.Index(context.Background(), dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitReady(t, svcs1, info.ID)
+	waitSnapshot(t, svcs1.Repo.snapshotPath(mustAbs(t, dir)))
+
+	// the file changes on disk after the snapshot was written
+	newMain := strings.Replace(fixtureMain, "func Main()", "func Main2()", 1)
+	if err := os.WriteFile(mainPath, []byte(newMain), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	svcs2 := testRepoServices(t, 1<<30)
+	svcs2.Repo.SetToolVersion("test-v1")
+	svcs2.Repo.SetCacheDir(cacheDir)
+	info2, err := svcs2.Repo.Index(context.Background(), dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitReady(t, svcs2, info2.ID)
+	st2, err := svcs2.Repo.Status(info2.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st2.Restored {
+		t.Fatal("stale-file restore should still restore then refresh")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if usages, _ := svcs2.Repo.Usages(info2.ID, "Main2"); len(usages) > 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("background refresh after restore did not pick up the changed file")
+}
+
+func mustAbs(t *testing.T, dir string) string {
+	t.Helper()
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return abs
+}
+
 func TestRepoServiceUnknownID(t *testing.T) {
 	svcs := testRepoServices(t, 1<<30)
 	if _, err := svcs.Repo.Status("nope"); err == nil {

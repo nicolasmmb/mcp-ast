@@ -45,6 +45,8 @@ type Info struct {
 	LastErrors  map[string]string `json:"last_errors,omitempty"`
 	Watch       bool              `json:"watch,omitempty"`
 	LastSync    time.Time         `json:"last_sync,omitempty"`
+	Restored    bool              `json:"restored,omitempty"`
+	CachePath   string            `json:"cache_path,omitempty"`
 	UpdatedAt   time.Time         `json:"updated_at"`
 	MemoryBytes int64             `json:"memory_used_bytes"`
 	MemoryLimit int64             `json:"memory_budget_bytes"`
@@ -56,6 +58,7 @@ type Store interface {
 	Create(root string) Info
 	SetState(id, state string) (Info, error)
 	SetWatch(id string, on bool) (Info, error)
+	SetCache(id string, restored bool, cachePath string) (Info, error)
 	Replace(id string, files map[string]IndexedFile, errs map[string]string) (Info, error)
 	Apply(id string, changes ChangeSet) (Info, error)
 	Info(id string) (Info, bool)
@@ -230,6 +233,19 @@ func (s *MemoryStore) SetWatch(id string, on bool) (Info, error) {
 		return Info{}, ErrNotFound
 	}
 	r.info.Watch = on
+	return r.info, nil
+}
+
+// SetCache records the persistence state of this index.
+func (s *MemoryStore) SetCache(id string, restored bool, cachePath string) (Info, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.repos[id]
+	if !ok {
+		return Info{}, ErrNotFound
+	}
+	r.info.Restored = restored
+	r.info.CachePath = cachePath
 	return r.info, nil
 }
 
