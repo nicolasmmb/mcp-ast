@@ -567,6 +567,53 @@ func mustAbs(t *testing.T, dir string) string {
 	return abs
 }
 
+func TestRepoServiceFindAllModes(t *testing.T) {
+	svcs := testRepoServices(t, 1<<30)
+	dir, _, _ := writeFixture(t)
+	info, err := svcs.Repo.Index(context.Background(), dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitReady(t, svcs, info.ID)
+
+	callers, err := svcs.Repo.Callers(info.ID, "Helper", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(callers) != 2 {
+		t.Fatalf("want 2 callers of Helper, got %#v", callers)
+	}
+	counts := map[string]int{}
+	for _, c := range callers {
+		counts[c.Name] = c.Count
+	}
+	if counts["Main"] != 2 || counts["Method"] != 1 {
+		t.Fatalf("unexpected caller counts: %#v", callers)
+	}
+
+	defs, err := svcs.Repo.Definitions(info.ID, "Helper", false, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundDef := false
+	for _, d := range defs {
+		if d.Name == "Helper" && d.Kind == "definition" {
+			foundDef = true
+		}
+	}
+	if !foundDef {
+		t.Fatalf("Helper definition missing: %#v", defs)
+	}
+
+	imports, err := svcs.Repo.Definitions(info.ID, "fmt", true, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(imports) != 1 || imports[0].Kind != "import" {
+		t.Fatalf("want 1 fmt import, got %#v", imports)
+	}
+}
+
 func TestRepoServiceUnknownID(t *testing.T) {
 	svcs := testRepoServices(t, 1<<30)
 	if _, err := svcs.Repo.Status("nope"); err == nil {

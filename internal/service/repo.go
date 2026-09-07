@@ -576,6 +576,96 @@ func (s *RepoService) Analyze(id, path string) (*engine.FileReport, error) {
 	return report, nil
 }
 
+// Callers returns every function that calls target, aggregated per caller,
+// matching the direct callers flow (kind/line/col from the caller symbol).
+func (s *RepoService) Callers(id, name string, limit int) ([]engine.Caller, error) {
+	g, ok := s.store.Calls(id)
+	if !ok {
+		return nil, fmt.Errorf("unknown repository %q", id)
+	}
+	files, _ := s.store.Files(id)
+	out := make([]engine.Caller, 0)
+	for _, e := range g.ByCallee[name] {
+		caller := engine.Caller{File: e.File, Name: e.Caller, Count: e.Count}
+		if facts, ok := files[e.File]; ok {
+			if kind, sym, found := findSymbol(facts.Symbols, e.Caller); found {
+				caller.Kind = kind
+				caller.Line = sym.Start.Row + 1
+				caller.Col = sym.Start.Col
+			}
+		}
+		out = append(out, caller)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		if out[i].File != out[j].File {
+			return out[i].File < out[j].File
+		}
+		return out[i].Name < out[j].Name
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+// findSymbol locates the first declared symbol with the given name.
+func findSymbol(groups map[string][]engine.Symbol, name string) (string, engine.Symbol, bool) {
+	for kind, syms := range groups {
+		if kind == "imports" {
+			continue
+		}
+		for _, sym := range syms {
+			if sym.Name == name {
+				return kind, sym, true
+			}
+		}
+	}
+	return "", engine.Symbol{}, false
+}
+
+// Definitions returns declared symbols matching name (importsOnly selects the
+// import kind), mirroring the direct definitions/imports flow.
+func (s *RepoService) Definitions(id, name string, importsOnly bool, limit int) ([]engine.UsageMatch, error) {
+	files, ok := s.store.Files(id)
+	if !ok {
+		return nil, fmt.Errorf("unknown repository %q", id)
+	}
+	paths := make([]string, 0, len(files))
+	for p := range files {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	matches := make([]engine.UsageMatch, 0)
+	for _, p := range paths {
+		for kind, syms := range files[p].Symbols {
+			isImport := kind == "imports"
+			if importsOnly != isImport {
+				continue
+			}
+			for _, sym := range syms {
+				if name != "" && sym.Name != name && !strings.Contains(sym.Text, name) {
+					continue
+				}
+				mk := "definition"
+				if isImport {
+					mk = "import"
+				}
+				matches = append(matches, engine.UsageMatch{
+					File: p, Name: sym.Name, Line: sym.Start.Row + 1, Col: sym.Start.Col, Text: sym.Text, Kind: mk,
+				})
+			}
+		}
+	}
+	sortUsageMatches(matches)
+	if limit > 0 && len(matches) > limit {
+		matches = matches[:limit]
+	}
+	return matches, nil
+}
+
 // Usages queries indexed usages for a symbol.
 func (s *RepoService) Usages(id, name string) ([]engine.UsageMatch, error) {
 	matches, ok := s.store.Usages(id, name)

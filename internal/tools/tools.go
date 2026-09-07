@@ -159,7 +159,7 @@ func Register(s *mcp.Server, svcs *service.Services) {
 
 	add(s, svcs, &mcp.Tool{
 		Name:        "find_usages",
-		Description: "Find symbol usages in a directory. ALWAYS run before rename/delete. mode=occurrences (definition|call-site|import|reference), callers (counts), unused (heuristic), definitions, imports. group_by_file defaults true to keep payloads small. Prefer outline_file for one-file structure. On an indexed repo, pass repo_id instead of path: occurrences and unused are served from the index (source=indexed), with cursor pagination via next_cursor.",
+		Description: "Find symbol usages in a directory. ALWAYS run before rename/delete. mode=occurrences (definition|call-site|import|reference), callers (counts), unused (heuristic), definitions, imports. group_by_file defaults true to keep payloads small. Prefer outline_file for one-file structure. On an indexed repo, pass repo_id instead of path: all modes are served from the index (source=indexed), with cursor pagination on occurrences via next_cursor.",
 	}, handleFindUsages)
 
 	add(s, svcs, &mcp.Tool{
@@ -506,7 +506,15 @@ type findUsagesOutput struct {
 
 func handleFindUsages(ctx context.Context, svcs *service.Services, in findUsagesInput) (*findUsagesOutput, error) {
 	if in.RepoID != "" {
-		if in.Mode == string(service.FindUnused) {
+		if in.Name == "" && in.Mode != string(service.FindUnused) {
+			return nil, fmt.Errorf("name is required with repo_id")
+		}
+		group := true
+		if in.GroupByFile != nil {
+			group = *in.GroupByFile
+		}
+		switch in.Mode {
+		case string(service.FindUnused):
 			res, err := svcs.Repo.Unused(in.RepoID, in.Limit)
 			if err != nil {
 				return nil, err
@@ -514,34 +522,47 @@ func handleFindUsages(ctx context.Context, svcs *service.Services, in findUsages
 			return &findUsagesOutput{FindResult: service.FindResult{
 				Language: "indexed", Mode: in.Mode, Source: "indexed_heuristic", Symbols: res.Matches,
 			}}, nil
+		case string(service.FindCallers):
+			callers, err := svcs.Repo.Callers(in.RepoID, in.Name, in.Limit)
+			if err != nil {
+				return nil, err
+			}
+			return &findUsagesOutput{FindResult: service.FindResult{
+				Language: "indexed", Mode: in.Mode, Source: "indexed", Callers: callers,
+			}}, nil
+		case string(service.FindDefinitions), string(service.FindImports):
+			matches, err := svcs.Repo.Definitions(in.RepoID, in.Name, in.Mode == string(service.FindImports), in.Limit)
+			if err != nil {
+				return nil, err
+			}
+			res := &service.FindResult{
+				Language: "indexed", Mode: in.Mode, Source: "indexed", Matches: matches,
+			}
+			if group {
+				res.Files = service.GroupUsageByFile(matches)
+			}
+			return &findUsagesOutput{FindResult: *res}, nil
+		case string(service.FindOccurrences):
+			page, err := svcs.Repo.UsagePage(in.RepoID, in.Name, in.Cursor, in.Limit)
+			if err != nil {
+				return nil, err
+			}
+			res := &service.FindResult{
+				Language:   "indexed",
+				Mode:       in.Mode,
+				Source:     "indexed",
+				Matches:    page.Matches,
+				Kinds:      in.Kinds,
+				NextCursor: page.NextCursor,
+				Truncated:  page.Truncated,
+			}
+			if group {
+				res.Files = service.GroupUsageByFile(page.Matches)
+			}
+			return &findUsagesOutput{FindResult: *res}, nil
+		default:
+			return nil, fmt.Errorf("invalid find_usages mode %q with repo_id", in.Mode)
 		}
-		if in.Mode != string(service.FindOccurrences) {
-			return nil, fmt.Errorf("repo_id only supports mode=occurrences and mode=unused")
-		}
-		if in.Name == "" {
-			return nil, fmt.Errorf("name is required with repo_id")
-		}
-		group := true
-		if in.GroupByFile != nil {
-			group = *in.GroupByFile
-		}
-		page, err := svcs.Repo.UsagePage(in.RepoID, in.Name, in.Cursor, in.Limit)
-		if err != nil {
-			return nil, err
-		}
-		res := &service.FindResult{
-			Language:   "indexed",
-			Mode:       in.Mode,
-			Source:     "indexed",
-			Matches:    page.Matches,
-			Kinds:      in.Kinds,
-			NextCursor: page.NextCursor,
-			Truncated:  page.Truncated,
-		}
-		if group {
-			res.Files = service.GroupUsageByFile(page.Matches)
-		}
-		return &findUsagesOutput{FindResult: *res}, nil
 	}
 	if in.Path == "" {
 		return nil, fmt.Errorf("path is required when repo_id is empty")
