@@ -86,48 +86,48 @@ func add[In any, Out TimedOutput](s *mcp.Server, svcs *service.Services, t *mcp.
 func Register(s *mcp.Server, svcs *service.Services) {
 	add(s, svcs, &mcp.Tool{
 		Name:        "list_languages",
-		Description: "List programming languages supported by this AST server. Call first to discover available languages before other tools.",
+		Description: "List programming languages supported by this AST server. Call first to discover available languages before other tools. Do not use for file analysis.",
 	}, handleListLanguages)
 
 	add(s, svcs, &mcp.Tool{
 		Name:         "parse_ast",
-		Description:  "Parse one source file and return its AST as recursive JSON. Prefer query_ast for targeted extraction; set max_depth (e.g. 5) on large files.",
+		Description:  "Parse one source file and return its AST as recursive JSON. Use to explore grammar structure. Prefer query_ast or scan_symbols for extraction. Set max_depth (e.g. 5) on large files to keep output small. Next: use get_text with node ranges.",
 		OutputSchema: parseASTSchema,
 	}, handleParseAST)
 
 	add(s, svcs, &mcp.Tool{
 		Name:        "query_ast",
-		Description: "Run a tree-sitter query on one file. Prefer scan_symbols for built-in symbol kinds.",
+		Description: "Run a tree-sitter query on one file; returns matches with captures and positions. Use for custom extraction. Prefer scan_symbols for built-in kinds (functions, classes). Keep limit small. Next: get_text on capture ranges.",
 	}, handleQueryAST)
 
 	add(s, svcs, &mcp.Tool{
 		Name:        "scan_symbols",
-		Description: "Extract symbols from a file OR directory. Prefer outline_file for hierarchy; find_usages for references.",
+		Description: "Extract symbols from a file OR directory (path can be either). Filter with languages[], kinds[], name. Prefer outline_file for hierarchy of one file; find_usages before rename/delete. Default text is one-line summary.",
 	}, handleScanSymbols)
 
 	add(s, svcs, &mcp.Tool{
 		Name:        "analyze_file",
-		Description: "Full dossier for one file: metrics, complexity, call graph. For directory hotspots use rank_complexity.",
+		Description: "Full dossier for one file in a single parse: metrics, per-kind stats, cyclomatic complexity, call graph. For directory-wide hotspots use rank_complexity instead of looping this tool. Next: get_text on complex functions.",
 	}, handleAnalyzeFile)
 
 	add(s, svcs, &mcp.Tool{
 		Name:        "get_text",
-		Description: "Return exact source text for a 0-based (row,col) range from other tool outputs.",
+		Description: "Return exact source text for a 0-based (row,col) range from other tool outputs. Prefer this over loading whole files. Ranges inclusive at start, exclusive at end.",
 	}, handleGetText)
 
 	add(s, svcs, &mcp.Tool{
 		Name:        "find_usages",
-		Description: "Find usages in a directory. mode=occurrences|callers|unused|definitions|imports. group_by_file defaults true. Run before rename/delete.",
+		Description: "Find symbol usages in a directory. ALWAYS run before rename/delete. mode=occurrences (definition|call-site|import|reference), callers (counts), unused (heuristic), definitions, imports. group_by_file defaults true to keep payloads small. Prefer outline_file for one-file structure.",
 	}, handleFindUsages)
 
 	add(s, svcs, &mcp.Tool{
 		Name:        "rank_complexity",
-		Description: "Rank functions/methods in a directory by cyclomatic complexity (top-N). Default limit=20.",
+		Description: "Rank functions/methods in a directory by cyclomatic complexity (top-N, default 20). Use BEFORE looping analyze_file on every file. Not a substitute for analyze_file when you need one file's call graph. Next: get_text on returned ranges.",
 	}, handleRankComplexity)
 
 	add(s, svcs, &mcp.Tool{
 		Name:         "outline_file",
-		Description:  "Hierarchical symbol outline for one file via range containment. Prefer get_text for bodies.",
+		Description:  "Hierarchical symbol outline for one file (types/classes → methods/fields) via range containment. Use for navigation without full AST cost. Prefer analyze_file for complexity/call graph; get_text for bodies.",
 		OutputSchema: outlineSchema,
 	}, handleOutlineFile)
 }
@@ -176,7 +176,7 @@ type queryASTInput struct {
 	Path        string `json:"path" jsonschema:"path to the source file"`
 	Query       string `json:"query" jsonschema:"tree-sitter query syntax"`
 	Limit       int    `json:"limit,omitempty" jsonschema:"optional; max matches"`
-	IncludeText bool   `json:"include_text,omitempty" jsonschema:"optional; full text"`
+	IncludeText bool   `json:"include_text,omitempty" jsonschema:"optional full text"`
 }
 type queryASTOutput struct {
 	Timed
