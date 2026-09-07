@@ -24,6 +24,7 @@ var errUnstable = errors.New("file changed while being indexed")
 type RepoService struct {
 	eng           *engine.Engine
 	store         repoindex.Store
+	roots         sync.Map // abs root -> repo id (index-first path resolution)
 	refreshLocks  sync.Map // repo id -> *sync.Mutex (refresh coalescing)
 	watchLangs    sync.Map // repo id -> languages used at index time
 	snapshotLangs sync.Map // repo id -> languages (snapshot header)
@@ -77,6 +78,7 @@ func (s *RepoService) Index(ctx context.Context, dir string, languages []string)
 		return repoindex.Info{}, err
 	}
 	info := s.store.Create(root)
+	s.roots.Store(root, info.ID)
 	path := s.snapshotPath(root)
 	langsKey := strings.Join(languages, ",")
 	s.snapshotLangs.Store(info.ID, languages)
@@ -126,7 +128,148 @@ func (s *RepoService) Drop(id string) error {
 	if !s.store.Drop(id) {
 		return fmt.Errorf("unknown repository %q", id)
 	}
+	s.roots.Range(func(k, v any) bool {
+		if v == id {
+			s.roots.Delete(k)
+			return false
+		}
+		return true
+	})
 	return nil
+}
+
+// ResolveIndex maps a file or directory path to the ready index whose root
+// is its longest prefix. Returns ok=false when no configured root covers
+// the path or the covering index is not ready yet.
+func (s *RepoService) ResolveIndex(path string) (repoindex.Info, bool) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return repoindex.Info{}, false
+	}
+	abs = filepath.Clean(abs)
+	bestRoot := ""
+	bestID := ""
+	s.roots.Range(func(k, v any) bool {
+		root := k.(string)
+		if abs == root || strings.HasPrefix(abs, root+string(os.PathSeparator)) {
+			if len(root) > len(bestRoot) {
+				bestRoot, bestID = root, v.(string)
+			}
+		}
+		return true
+	})
+	if bestID == "" {
+		return repoindex.Info{}, false
+	}
+	info, ok := s.store.Info(bestID)
+	if !ok || info.State != "ready" {
+		return repoindex.Info{}, false
+	}
+	return info, true
+}
+
+// ---------------------------------------------------------------------------
+// Path-based API. Every method resolves the path to a ready index; ok=false
+// means "not covered by any index" and the caller should use the disk flow.
+// ---------------------------------------------------------------------------
+
+func (s *RepoService) ScanAt(path string, languages, kinds []string, name string, limit int) (*ScanResult, bool, error) {
+	info, ok := s.ResolveIndex(path)
+	if !ok {
+		return nil, false, nil
+	}
+	res, err := s.Scan(info.ID, languages, kinds, name, limit)
+	return res, err == nil, err
+}
+
+func (s *RepoService) FindOccurrencesAt(path, name, cursor string, limit int) (*UsagePage, bool, error) {
+	info, ok := s.ResolveIndex(path)
+	if !ok {
+		return nil, false, nil
+	}
+	page, err := s.UsagePage(info.ID, name, cursor, limit)
+	return page, err == nil, err
+}
+
+func (s *RepoService) UnusedAt(path string, limit int) (*engine.SearchResult, bool, error) {
+	info, ok := s.ResolveIndex(path)
+	if !ok {
+		return nil, false, nil
+	}
+	res, err := s.Unused(info.ID, limit)
+	return res, err == nil, err
+}
+
+func (s *RepoService) CallersAt(path, name string, limit int) ([]engine.Caller, bool, error) {
+	info, ok := s.ResolveIndex(path)
+	if !ok {
+		return nil, false, nil
+	}
+	res, err := s.Callers(info.ID, name, limit)
+	return res, err == nil, err
+}
+
+func (s *RepoService) DefinitionsAt(path, name string, importsOnly bool, limit int) ([]engine.UsageMatch, bool, error) {
+	info, ok := s.ResolveIndex(path)
+	if !ok {
+		return nil, false, nil
+	}
+	res, err := s.Definitions(info.ID, name, importsOnly, limit)
+	return res, err == nil, err
+}
+
+func (s *RepoService) ComplexityAt(path string, limit int) ([]engine.RankedComplexity, bool, error) {
+	info, ok := s.ResolveIndex(path)
+	if !ok {
+		return nil, false, nil
+	}
+	res, err := s.Complexity(info.ID, limit)
+	return res, err == nil, err
+}
+
+func (s *RepoService) OutlineAt(path string, includeText bool) (*OutlineResult, bool, error) {
+	info, ok := s.ResolveIndex(path)
+	if !ok {
+		return nil, false, nil
+	}
+	res, err := s.Outline(info.ID, path, includeText)
+	return res, err == nil, err
+}
+
+func (s *RepoService) AnalyzeAt(path string) (*engine.FileReport, bool, error) {
+	info, ok := s.ResolveIndex(path)
+	if !ok {
+		return nil, false, nil
+	}
+	res, err := s.Analyze(info.ID, path)
+	return res, err == nil, err
+}
+
+func (s *RepoService) ImpactAt(path, graph, target string, reverse bool, depth, limit int, cursor string) (repoindex.ImpactResult, bool, error) {
+	info, ok := s.ResolveIndex(path)
+	if !ok {
+		return repoindex.ImpactResult{}, false, nil
+	}
+	res, err := s.Impact(info.ID, graph, target, reverse, depth, limit, cursor)
+	return res, err == nil, err
+}
+
+func (s *RepoService) CyclesAt(path, graph string) ([][]string, bool, error) {
+	info, ok := s.ResolveIndex(path)
+	if !ok {
+		return nil, false, nil
+	}
+	res, err := s.Cycles(info.ID, graph)
+	return res, err == nil, err
+}
+
+func (s *RepoService) TopologyAt(path, graph string) ([][]string, bool, error) {
+	info, ok := s.ResolveIndex(path)
+	if !ok {
+		return nil, false, nil
+	}
+	res, err := s.Topology(info.ID, graph)
+	return res, err == nil, err
 }
 
 func (s *RepoService) Status(id string) (repoindex.Info, error) {

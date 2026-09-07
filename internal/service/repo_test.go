@@ -623,3 +623,92 @@ func TestRepoServiceUnknownID(t *testing.T) {
 		t.Fatal("want error for unknown repo id on usages")
 	}
 }
+
+func TestRepoServiceResolveIndexPath(t *testing.T) {
+	svcs := testRepoServices(t, 1<<30)
+	ctx := context.Background()
+	dir, _, _ := writeFixture(t)
+	info, err := svcs.Repo.Index(ctx, dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitReady(t, svcs, info.ID)
+
+	if got, ok := svcs.Repo.ResolveIndex(dir); !ok || got.ID != info.ID {
+		t.Fatalf("root path must resolve to indexed repo: ok=%v got=%v", ok, got)
+	}
+	if got, ok := svcs.Repo.ResolveIndex(filepath.Join(dir, "vendor")); !ok || got.ID != info.ID {
+		t.Fatalf("subdir path must resolve to indexed repo: ok=%v got=%v", ok, got)
+	}
+	if got, ok := svcs.Repo.ResolveIndex(filepath.Join(dir, "vendor", "..")); !ok || got.ID != info.ID {
+		t.Fatalf("path with .. must normalize and resolve: ok=%v got=%v", ok, got)
+	}
+	outside := t.TempDir()
+	if _, ok := svcs.Repo.ResolveIndex(outside); ok {
+		t.Fatal("path outside every root must not resolve")
+	}
+
+	res, ok, err := svcs.Repo.ScanAt(dir, nil, nil, "", 10)
+	if err != nil || !ok || res == nil {
+		t.Fatalf("ScanAt on root: ok=%v err=%v res=%v", ok, err, res)
+	}
+	if _, ok, err := svcs.Repo.ScanAt(outside, nil, nil, "", 10); ok || err != nil {
+		t.Fatalf("ScanAt outside roots must return ok=false, nil err: ok=%v err=%v", ok, err)
+	}
+
+	if _, err := svcs.Repo.store.SetState(info.ID, "building"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := svcs.Repo.ResolveIndex(dir); ok {
+		t.Fatal("building index must not resolve")
+	}
+	if _, ok, err := svcs.Repo.ScanAt(dir, nil, nil, "", 10); ok || err != nil {
+		t.Fatalf("ScanAt on building index must return ok=false: ok=%v err=%v", ok, err)
+	}
+	if _, err := svcs.Repo.store.SetState(info.ID, "ready"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svcs.Repo.Drop(info.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := svcs.Repo.ResolveIndex(dir); ok {
+		t.Fatal("dropped repo must not resolve")
+	}
+}
+
+func TestRepoServiceResolveNestedRoots(t *testing.T) {
+	svcs := testRepoServices(t, 1<<30)
+	ctx := context.Background()
+	outer := t.TempDir()
+	inner := filepath.Join(outer, "inner")
+	if err := os.MkdirAll(inner, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outer, "a.go"), []byte("package outer\nfunc A() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(inner, "b.go"), []byte("package inner\nfunc B() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outerInfo, err := svcs.Repo.Index(ctx, outer, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	innerInfo, err := svcs.Repo.Index(ctx, inner, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitReady(t, svcs, outerInfo.ID)
+	waitReady(t, svcs, innerInfo.ID)
+
+	if got, ok := svcs.Repo.ResolveIndex(inner); !ok || got.ID != innerInfo.ID {
+		t.Fatalf("nested root must win by longest prefix: ok=%v got=%v", ok, got)
+	}
+	if got, ok := svcs.Repo.ResolveIndex(filepath.Join(inner, "b.go")); !ok || got.ID != innerInfo.ID {
+		t.Fatalf("file in nested root must resolve to inner: ok=%v got=%v", ok, got)
+	}
+	if got, ok := svcs.Repo.ResolveIndex(filepath.Join(outer, "a.go")); !ok || got.ID != outerInfo.ID {
+		t.Fatalf("file outside nested root must resolve to outer: ok=%v got=%v", ok, got)
+	}
+}
