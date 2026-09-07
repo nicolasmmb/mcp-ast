@@ -73,7 +73,7 @@ Premissas adotadas:
 - [x] T5.2 ARCHITECTURE: fluxo do boot, resolução por path, tabela de 13 tools, flags novas, benchmarks renomeados.
 - [x] T5.3 Conferir docs contra o código: 9 flags e 13 tools confirmadas por grep.
 
-**Pronto quando:** única menção aos nomes antigos é a tabela "Migração (breaking)" do README (mapa antigo→novo, intencional); leitor novo usa `-repo` e nada mais.
+**Pronto quando:** `grep "repo_id|index_repo|search_repo|repo_status|refresh_repo|drop_repo" README.md ARCHITECTURE.md` vazio; leitor novo usa `-repo` e nada mais.
 **Validação:** grep de conferência (flags/tools vs. código).
 **Commit:** `docs: index-first usage`
 
@@ -87,6 +87,4 @@ Premissas adotadas:
 | S2 | DONE | 84e870f | testes + smoke de boot: `state=ready restored=true` |
 | S3 | DONE | db7a30c | grep `repo_id` vazio; `go test ./...` verde; smoke MCP: `source=indexed` com `-repo`, disco puro sem |
 | S4 | DONE | 9ddfc71 | `go test -race` verde; grep `repo_id`/`RepoID` vazio em todo `internal/` |
-| S5 | DONE | (neste commit) | grep: nomes antigos só na tabela de migração; 9 flags + 13 tools conferidas |
-
-Nota S5: o gate original ("grep vazio") foi ajustado — a tabela "Migração (breaking)" do README cita os nomes antigos de propósito para mapear antigo→novo.
+| S5 | DONE | a0e341e (+ref) | grep de nomes antigos vazio nas docs; 9 flags + 13 tools conferidas |

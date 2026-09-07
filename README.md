@@ -40,9 +40,6 @@ configurado com a flag `-repo`, a consulta usa o índice em RAM automaticamente
 | `unused_symbols_dir` | `find_usages` com `mode=unused` |
 | — | `rank_complexity` (nova) |
 | — | `outline_file` (nova) |
-| `index_repo` / `refresh_repo` / `drop_repo` | flag `-repo` no boot (indexação, refresh via watch e remoção automáticos) |
-| `repo_status` / `search_repo` | `index_status` + tools de busca com `path` |
-| parâmetro de identificador de repositório | removido — só `path` |
 
 **Referência rápida — o que cada tool retorna:**
 
