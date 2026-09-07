@@ -23,8 +23,9 @@ cmd/ast-mcp/main.go          → CLI + bootstrap MCP server
   │     usages.go / unused.go / calls.go → wrappers com merge multi-linguagem
   │     repo.go              → RepoService: indexação/refresh/consulta de repositório
   ├── internal/repoindex/    → Boundary de armazenamento do índice
-  │     store.go             → Store interface + MemoryStore (RAM, postings por arquivo, Apply delta)
+  │     store.go             → Store interface + MemoryStore (RAM, interning, Apply delta)
   │     graph.go             → call/import graphs + Tarjan/SCC + DAG condensado + impacto
+  │     cursor.go            → cursores de paginação versionados
   └── internal/tools/        → Camada MCP (2 arquivos)
         tools.go             → Tabela declarativa das 10 tools via add[In, Out] genérico
         timing.go            → Wrapper de timeout + elapsed_ms + logging
@@ -141,6 +142,30 @@ Workflow único `.github/workflows/release.yml`:
 
 Binários: `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`, `windows/amd64`.
 
+## Repo mode (índice em RAM)
+
+`index_repo` roda em background e publica um snapshot atômico sob `RWMutex`. Postings
+são chaveados por `NameID → FileID → UsageRef` (interning de paths/nomes/canonical;
+`UsageRef` é ~40 bytes vs ~112 de `UsageMatch`). `refresh_repo` aplica `ChangeSet`
+incremental com coalescing (`TryLock`), erros por arquivo (`last_errors`, cap 50) e
+retry TOCTOU (`errUnstable`). Deltas > 20% ou 500 arquivos viram rebuild completo.
+
+Consultas indexadas: `scan_symbols`/`find_usages`/`rank_complexity`/`outline_file`/
+`analyze_file` com `repo_id`. `outline_file` (sem texto) é servido por
+`OutlineFromSymbols` (`source: indexed`); dados ausentes ou arquivo alterado caem no
+AST fallback de um único arquivo (com reindexação automática). Paginação por cursor
+versionado (`next_cursor`/`truncated`; cursor de versão antiga é rejeitado).
+
+Grafos são direcionados gerais, não DAGs: recursão e imports circulares criam ciclos.
+`repo_cycles` roda Tarjan; `repo_topology` condensa SCCs em DAG por camadas (Kahn).
+`repo_impact` faz BFS reverso/direto com depth/limit. Limites semânticos (lexical):
+call graph classifica arestas como `exact|candidate|unresolved` pela contagem de
+declarações; imports externos ficam como specifier bruto; `unused` é heurístico
+(sem resolução de escopo) e não conta comentários/strings.
+
+Watch opcional por polling (`-watch`, `-watch-interval`): cada tick chama o refresh
+incremental (delta vazio = no-op). `repo_status` expõe `watch` e `last_sync`.
+
 ## Benchmarks de escala (repo sintético, 50 mil arquivos)
 
 Fixture: 50k arquivos Go sintéticos, 2 funções e 1 referência compartilhada `token` por arquivo.
@@ -170,6 +195,9 @@ Lookup indexado não repete walk/parse; o custo por página é a janela de posti
 | `-verbose` | Debug no stderr |
 | `-log <path>` | Info+ em arquivo (append) |
 | `-tool-timeout` | Timeout por tool (default 30s) |
+| `-max-memory` | Orçamento do índice em MB (default `auto`: 25% da RAM, 256 MB–4 GB) |
+| `-watch` | Mantém índices frescos por polling |
+| `-watch-interval` | Intervalo do polling (default 5s) |
 
 ## Testes
 
