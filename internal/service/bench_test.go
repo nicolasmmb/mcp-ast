@@ -95,7 +95,7 @@ func BenchmarkRefreshNoop50k(b *testing.B) {
 	info := indexAll(b, svcs, dir)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := svcs.Repo.Refresh(context.Background(), info.ID, nil); err != nil {
+		if _, err := svcs.Repo.refresh(context.Background(), info.ID, nil); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -118,7 +118,7 @@ func BenchmarkRefreshOnePercent50k(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := svcs.Repo.Refresh(context.Background(), info.ID, nil); err != nil {
+		if _, err := svcs.Repo.refresh(context.Background(), info.ID, nil); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -130,7 +130,7 @@ func BenchmarkLookup50k(b *testing.B) {
 	info := indexAll(b, svcs, dir)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := svcs.Repo.UsagePage(info.ID, "token", "", 500); err != nil {
+		if _, err := svcs.Repo.usagePage(info.ID, "token", "", 500); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -142,7 +142,7 @@ func BenchmarkImpact50k(b *testing.B) {
 	info := indexAll(b, svcs, dir)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := svcs.Repo.Impact(info.ID, "calls", "F000001", true, 1, 100, ""); err != nil {
+		if _, err := svcs.Repo.impact(info.ID, "calls", "F000001", true, 1, 100, ""); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -155,7 +155,7 @@ func TestScaleIndexLookup5k(t *testing.T) {
 	if info.State != "ready" || info.Files != 5000 {
 		t.Fatalf("unexpected state: %#v", info)
 	}
-	page, err := svcs.Repo.UsagePage(info.ID, "token", "", 5000)
+	page, err := svcs.Repo.usagePage(info.ID, "token", "", 5000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestScaleMemoryPartial(t *testing.T) {
 		t.Fatalf("want partial with 1-byte budget, got %#v", info)
 	}
 	// usages must still answer (index data kept, state partial)
-	if _, err := svcs.Repo.Usages(info.ID, "token"); err != nil {
+	if _, err := svcs.Repo.usages(info.ID, "token"); err != nil {
 		t.Fatalf("query after partial must work: %v", err)
 	}
 }

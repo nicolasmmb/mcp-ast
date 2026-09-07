@@ -91,7 +91,7 @@ func (s *RepoService) Index(ctx context.Context, dir string, languages []string)
 					_, _ = s.store.SetWatch(info.ID, true)
 					s.startWatch(info.ID, languages)
 				}
-				go func() { _, _ = s.Refresh(context.Background(), info.ID, languages) }()
+				go func() { _, _ = s.refresh(context.Background(), info.ID, languages) }()
 				return info, nil
 			}
 		}
@@ -119,12 +119,12 @@ func (s *RepoService) startWatch(id string, languages []string) {
 			langs, _ := s.watchLangs.Load(id)
 			names, _ := langs.([]string)
 			_ = info
-			_, _ = s.Refresh(context.Background(), id, names)
+			_, _ = s.refresh(context.Background(), id, names)
 		}
 	}()
 }
 
-func (s *RepoService) Drop(id string) error {
+func (s *RepoService) drop(id string) error {
 	if !s.store.Drop(id) {
 		return fmt.Errorf("unknown repository %q", id)
 	}
@@ -190,7 +190,7 @@ func (s *RepoService) ScanAt(path string, languages, kinds []string, name string
 	if !ok {
 		return nil, false, nil
 	}
-	res, err := s.Scan(info.ID, languages, kinds, name, limit)
+	res, err := s.scan(info.ID, languages, kinds, name, limit)
 	return res, err == nil, err
 }
 
@@ -199,7 +199,7 @@ func (s *RepoService) FindOccurrencesAt(path, name, cursor string, limit int) (*
 	if !ok {
 		return nil, false, nil
 	}
-	page, err := s.UsagePage(info.ID, name, cursor, limit)
+	page, err := s.usagePage(info.ID, name, cursor, limit)
 	return page, err == nil, err
 }
 
@@ -208,7 +208,7 @@ func (s *RepoService) UnusedAt(path string, limit int) (*engine.SearchResult, bo
 	if !ok {
 		return nil, false, nil
 	}
-	res, err := s.Unused(info.ID, limit)
+	res, err := s.unused(info.ID, limit)
 	return res, err == nil, err
 }
 
@@ -217,7 +217,7 @@ func (s *RepoService) CallersAt(path, name string, limit int) ([]engine.Caller, 
 	if !ok {
 		return nil, false, nil
 	}
-	res, err := s.Callers(info.ID, name, limit)
+	res, err := s.callers(info.ID, name, limit)
 	return res, err == nil, err
 }
 
@@ -226,7 +226,7 @@ func (s *RepoService) DefinitionsAt(path, name string, importsOnly bool, limit i
 	if !ok {
 		return nil, false, nil
 	}
-	res, err := s.Definitions(info.ID, name, importsOnly, limit)
+	res, err := s.definitions(info.ID, name, importsOnly, limit)
 	return res, err == nil, err
 }
 
@@ -235,7 +235,7 @@ func (s *RepoService) ComplexityAt(path string, limit int) ([]engine.RankedCompl
 	if !ok {
 		return nil, false, nil
 	}
-	res, err := s.Complexity(info.ID, limit)
+	res, err := s.complexity(info.ID, limit)
 	return res, err == nil, err
 }
 
@@ -244,7 +244,7 @@ func (s *RepoService) OutlineAt(path string, includeText bool) (*OutlineResult, 
 	if !ok {
 		return nil, false, nil
 	}
-	res, err := s.Outline(info.ID, path, includeText)
+	res, err := s.outline(info.ID, path, includeText)
 	return res, err == nil, err
 }
 
@@ -253,7 +253,7 @@ func (s *RepoService) AnalyzeAt(path string) (*engine.FileReport, bool, error) {
 	if !ok {
 		return nil, false, nil
 	}
-	res, err := s.Analyze(info.ID, path)
+	res, err := s.analyze(info.ID, path)
 	return res, err == nil, err
 }
 
@@ -262,7 +262,7 @@ func (s *RepoService) ImpactAt(path, graph, target string, reverse bool, depth, 
 	if !ok {
 		return repoindex.ImpactResult{}, false, nil
 	}
-	res, err := s.Impact(info.ID, graph, target, reverse, depth, limit, cursor)
+	res, err := s.impact(info.ID, graph, target, reverse, depth, limit, cursor)
 	return res, err == nil, err
 }
 
@@ -271,7 +271,7 @@ func (s *RepoService) CyclesAt(path, graph string) ([][]string, bool, error) {
 	if !ok {
 		return nil, false, nil
 	}
-	res, err := s.Cycles(info.ID, graph)
+	res, err := s.cycles(info.ID, graph)
 	return res, err == nil, err
 }
 
@@ -280,11 +280,11 @@ func (s *RepoService) TopologyAt(path, graph string) ([][]string, bool, error) {
 	if !ok {
 		return nil, false, nil
 	}
-	res, err := s.Topology(info.ID, graph)
+	res, err := s.topology(info.ID, graph)
 	return res, err == nil, err
 }
 
-func (s *RepoService) Status(id string) (repoindex.Info, error) {
+func (s *RepoService) status(id string) (repoindex.Info, error) {
 	info, ok := s.store.Info(id)
 	if !ok {
 		return repoindex.Info{}, fmt.Errorf("unknown repository %q", id)
@@ -366,7 +366,7 @@ func (s *RepoService) loadIndexed(path string, facts *engine.FileIndex, errs map
 // Small deltas apply incrementally; large ones trigger a full background
 // rebuild. A second concurrent refresh for the same repo is coalesced: it
 // returns the current state without starting another pass.
-func (s *RepoService) Refresh(ctx context.Context, id string, languages []string) (repoindex.Info, error) {
+func (s *RepoService) refresh(ctx context.Context, id string, languages []string) (repoindex.Info, error) {
 	info, ok := s.store.Info(id)
 	if !ok {
 		return repoindex.Info{}, fmt.Errorf("unknown repository %q", id)
@@ -567,7 +567,7 @@ type UsagePage struct {
 
 // UsagePage returns one page of usages for name (or a canonical key
 // containing '|'), ordered by file then line. limit is the page size.
-func (s *RepoService) UsagePage(id, name, cursor string, limit int) (*UsagePage, error) {
+func (s *RepoService) usagePage(id, name, cursor string, limit int) (*UsagePage, error) {
 	info, ok := s.store.Info(id)
 	if !ok {
 		return nil, fmt.Errorf("unknown repository %q", id)
@@ -592,7 +592,7 @@ func (s *RepoService) UsagePage(id, name, cursor string, limit int) (*UsagePage,
 	return page, nil
 }
 
-func (s *RepoService) Impact(id, graph, target string, reverse bool, depth, limit int, cursor string) (repoindex.ImpactResult, error) {
+func (s *RepoService) impact(id, graph, target string, reverse bool, depth, limit int, cursor string) (repoindex.ImpactResult, error) {
 	info, ok := s.store.Info(id)
 	if !ok {
 		return repoindex.ImpactResult{}, fmt.Errorf("unknown repository %q", id)
@@ -623,7 +623,7 @@ func (s *RepoService) Impact(id, graph, target string, reverse bool, depth, limi
 	return res, nil
 }
 
-func (s *RepoService) Cycles(id, graph string) ([][]string, error) {
+func (s *RepoService) cycles(id, graph string) ([][]string, error) {
 	adj, nodes, err := s.graphData(id, graph, false)
 	if err != nil {
 		return nil, err
@@ -631,7 +631,7 @@ func (s *RepoService) Cycles(id, graph string) ([][]string, error) {
 	return repoindex.Cycles(nodes, adj), nil
 }
 
-func (s *RepoService) Topology(id, graph string) ([][]string, error) {
+func (s *RepoService) topology(id, graph string) ([][]string, error) {
 	adj, nodes, err := s.graphData(id, graph, false)
 	if err != nil {
 		return nil, err
@@ -692,7 +692,7 @@ func (s *RepoService) freshFacts(id, path string) (*engine.FileIndex, error) {
 
 // Outline serves a file outline from indexed symbols when full text is not
 // needed; otherwise it re-parses that single file (AST fallback).
-func (s *RepoService) Outline(id, path string, includeText bool) (*OutlineResult, error) {
+func (s *RepoService) outline(id, path string, includeText bool) (*OutlineResult, error) {
 	facts, err := s.freshFacts(id, path)
 	if err != nil {
 		return nil, err
@@ -715,7 +715,7 @@ func (s *RepoService) Outline(id, path string, includeText bool) (*OutlineResult
 // (ponytail: keep the index lean; add indexed metrics if analyze becomes a
 // hot path), so the dossier always re-parses that single file, after
 // reindexing it when stale.
-func (s *RepoService) Analyze(id, path string) (*engine.FileReport, error) {
+func (s *RepoService) analyze(id, path string) (*engine.FileReport, error) {
 	if _, err := s.freshFacts(id, path); err != nil {
 		return nil, err
 	}
@@ -733,7 +733,7 @@ func (s *RepoService) Analyze(id, path string) (*engine.FileReport, error) {
 
 // Callers returns every function that calls target, aggregated per caller,
 // matching the direct callers flow (kind/line/col from the caller symbol).
-func (s *RepoService) Callers(id, name string, limit int) ([]engine.Caller, error) {
+func (s *RepoService) callers(id, name string, limit int) ([]engine.Caller, error) {
 	g, ok := s.store.Calls(id)
 	if !ok {
 		return nil, fmt.Errorf("unknown repository %q", id)
@@ -783,7 +783,7 @@ func findSymbol(groups map[string][]engine.Symbol, name string) (string, engine.
 
 // Definitions returns declared symbols matching name (importsOnly selects the
 // import kind), mirroring the direct definitions/imports flow.
-func (s *RepoService) Definitions(id, name string, importsOnly bool, limit int) ([]engine.UsageMatch, error) {
+func (s *RepoService) definitions(id, name string, importsOnly bool, limit int) ([]engine.UsageMatch, error) {
 	files, ok := s.store.Files(id)
 	if !ok {
 		return nil, fmt.Errorf("unknown repository %q", id)
@@ -822,7 +822,7 @@ func (s *RepoService) Definitions(id, name string, importsOnly bool, limit int) 
 }
 
 // Usages queries indexed usages for a symbol.
-func (s *RepoService) Usages(id, name string) ([]engine.UsageMatch, error) {
+func (s *RepoService) usages(id, name string) ([]engine.UsageMatch, error) {
 	matches, ok := s.store.Usages(id, name)
 	if !ok {
 		return nil, fmt.Errorf("unknown repository %q", id)
@@ -832,7 +832,7 @@ func (s *RepoService) Usages(id, name string) ([]engine.UsageMatch, error) {
 
 // Unused returns symbols declared but never referenced, from AST occurrences
 // in the index. The result is heuristic (no scope resolution).
-func (s *RepoService) Unused(id string, limit int) (*engine.SearchResult, error) {
+func (s *RepoService) unused(id string, limit int) (*engine.SearchResult, error) {
 	matches, ok := s.store.Unused(id)
 	if !ok {
 		return nil, fmt.Errorf("unknown repository %q", id)
@@ -843,7 +843,7 @@ func (s *RepoService) Unused(id string, limit int) (*engine.SearchResult, error)
 	return &engine.SearchResult{Total: len(matches), Matches: matches}, nil
 }
 
-func (s *RepoService) Complexity(id string, limit int) ([]engine.RankedComplexity, error) {
+func (s *RepoService) complexity(id string, limit int) ([]engine.RankedComplexity, error) {
 	entries, ok := s.store.Complexity(id, limit)
 	if !ok {
 		return nil, fmt.Errorf("unknown repository %q", id)
@@ -852,7 +852,7 @@ func (s *RepoService) Complexity(id string, limit int) ([]engine.RankedComplexit
 }
 
 // Scan filters indexed symbols by language, kind, exact name and limit.
-func (s *RepoService) Scan(id string, languages, kinds []string, name string, limit int) (*ScanResult, error) {
+func (s *RepoService) scan(id string, languages, kinds []string, name string, limit int) (*ScanResult, error) {
 	files, ok := s.store.Files(id)
 	if !ok {
 		return nil, fmt.Errorf("unknown repository %q", id)
@@ -875,7 +875,7 @@ func (s *RepoService) Scan(id string, languages, kinds []string, name string, li
 
 // FindUsages queries indexed usages for a symbol with the same filters as the
 // direct FindService flow (kinds, group_by_file, limit).
-func (s *RepoService) FindUsages(id, name string, q FindQuery) (*FindResult, error) {
+func (s *RepoService) findUsages(id, name string, q FindQuery) (*FindResult, error) {
 	matches, ok := s.store.Usages(id, name)
 	if !ok {
 		return nil, fmt.Errorf("unknown repository %q", id)

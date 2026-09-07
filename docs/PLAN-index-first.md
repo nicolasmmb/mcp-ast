@@ -54,12 +54,12 @@ Premissas adotadas:
 
 ---
 
-## S4 — Limpeza da API interna — [PENDING]
+## S4 — Limpeza da API interna — [DONE]
 
-- [ ] T4.1 Tornar privados os métodos por id usados só pelas wrappers `*At`.
-- [ ] T4.2 Remover `Refresh`/`Drop` públicos sem chamador (watch usa caminho interno).
-- [ ] T4.3 Grep final: só `repoindex.Info.ID` interno e testes de store restam.
-- [ ] T4.4 Sem funcionalidade nova.
+- [x] T4.1 Tornar privados os métodos por id usados só pelas wrappers `*At` e testes.
+- [x] T4.2 `refresh`/`drop`/`status` privados; watch usa caminho interno.
+- [x] T4.3 Grep final: `repo_id` só existia no tag JSON de `Info.ID` → tag `json:"-"` (id nunca exposto a clientes).
+- [x] T4.4 Sem funcionalidade nova.
 
 **Pronto quando:** nenhuma API pública referencia id de repositório; suíte `-race` verde.
 **Validação:** `go test ./internal/service ./internal/repoindex -race`
@@ -85,6 +85,6 @@ Premissas adotadas:
 |---|---|---|---|
 | S1 | DONE | 422754f | `go test ./...`, `go vet`, gates verdes |
 | S2 | DONE | 84e870f | testes + smoke de boot: `state=ready restored=true` |
-| S3 | DONE | (neste commit) | grep `repo_id` vazio; `go test ./...` verde; smoke MCP: `source=indexed` com `-repo`, disco puro sem |
-| S4 | PENDING | — | — |
+| S3 | DONE | db7a30c | grep `repo_id` vazio; `go test ./...` verde; smoke MCP: `source=indexed` com `-repo`, disco puro sem |
+| S4 | DONE | (neste commit) | `go test -race` verde; grep `repo_id`/`RepoID` vazio em todo `internal/` |
 | S5 | PENDING | — | — |

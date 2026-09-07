@@ -36,7 +36,7 @@ type ChangeSet struct {
 }
 
 type Info struct {
-	ID          string            `json:"repo_id"`
+	ID          string            `json:"-"` // internal storage key; never exposed to clients
 	Root        string            `json:"root"`
 	State       string            `json:"state"`
 	Version     uint64            `json:"index_version"`

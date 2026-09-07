@@ -17,7 +17,7 @@ func waitReady(t *testing.T, svcs *Services, id string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		info, err := svcs.Repo.Status(id)
+		info, err := svcs.Repo.status(id)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -54,7 +54,7 @@ func TestRepoServiceIndexAndQuery(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitReady(t, svcs, info.ID)
-	info, err = svcs.Repo.Status(info.ID)
+	info, err = svcs.Repo.status(info.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestRepoServiceIndexAndQuery(t *testing.T) {
 		t.Fatalf("unexpected status: %#v", info)
 	}
 
-	scan, err := svcs.Repo.Scan(info.ID, nil, nil, "", 0)
+	scan, err := svcs.Repo.scan(info.ID, nil, nil, "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestRepoServiceIndexAndQuery(t *testing.T) {
 		t.Fatalf("scan: want 2 files, got %d", len(scan.Files))
 	}
 
-	got, err := svcs.Repo.FindUsages(info.ID, "Helper", FindQuery{Mode: FindOccurrences, GroupByFile: false})
+	got, err := svcs.Repo.findUsages(info.ID, "Helper", FindQuery{Mode: FindOccurrences, GroupByFile: false})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestRepoServiceIndexAndQuery(t *testing.T) {
 		}
 	}
 
-	ranked, err := svcs.Repo.Complexity(info.ID, 10)
+	ranked, err := svcs.Repo.complexity(info.ID, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,14 +100,14 @@ func TestRepoServiceMemoryPartial(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitReady(t, svcs, info.ID)
-	info, err = svcs.Repo.Status(info.ID)
+	info, err = svcs.Repo.status(info.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if info.State != "partial" {
 		t.Fatalf("want partial state, got %q", info.State)
 	}
-	if _, err := svcs.Repo.Usages(info.ID, "Helper"); err != nil {
+	if _, err := svcs.Repo.usages(info.ID, "Helper"); err != nil {
 		t.Fatalf("query on partial index should still succeed: %v", err)
 	}
 }
@@ -121,7 +121,7 @@ func TestRepoServiceRefreshIncremental(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitReady(t, svcs, info.ID)
-	info, err = svcs.Repo.Status(info.ID)
+	info, err = svcs.Repo.status(info.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,21 +135,21 @@ func TestRepoServiceRefreshIncremental(t *testing.T) {
 	if err := os.WriteFile(mainPath, []byte(newMain), facts.Mode()); err != nil {
 		t.Fatal(err)
 	}
-	info, err = svcs.Repo.Refresh(context.Background(), info.ID, nil)
+	info, err = svcs.Repo.refresh(context.Background(), info.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if info.Version <= before {
 		t.Fatalf("refresh should bump version: before %d, after %d", before, info.Version)
 	}
-	if _, err := svcs.Repo.Usages(info.ID, "Main2"); err != nil {
+	if _, err := svcs.Repo.usages(info.ID, "Main2"); err != nil {
 		t.Fatalf("usages after refresh: %v", err)
 	}
-	matches, _ := svcs.Repo.Usages(info.ID, "Main2")
+	matches, _ := svcs.Repo.usages(info.ID, "Main2")
 	if len(matches) == 0 {
 		t.Fatal("Main2 should have usages after refresh")
 	}
-	if old, _ := svcs.Repo.Usages(info.ID, "Main"); len(old) != 0 {
+	if old, _ := svcs.Repo.usages(info.ID, "Main"); len(old) != 0 {
 		t.Fatalf("Main should be gone after rename: %d matches", len(old))
 	}
 }
@@ -165,7 +165,7 @@ func TestRepoServiceRefreshDelete(t *testing.T) {
 	if err := os.Remove(mainPath); err != nil {
 		t.Fatal(err)
 	}
-	info, err = svcs.Repo.Refresh(context.Background(), info.ID, nil)
+	info, err = svcs.Repo.refresh(context.Background(), info.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,18 +183,18 @@ func TestRepoServiceGraphs(t *testing.T) {
 	}
 	waitReady(t, svcs, info.ID)
 
-	res, err := svcs.Repo.Impact(info.ID, "calls", "Helper", true, 0, 10, "")
+	res, err := svcs.Repo.impact(info.ID, "calls", "Helper", true, 0, 10, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(res.Nodes) == 0 {
 		t.Fatal("Helper should have callers in the call graph")
 	}
-	cycles, err := svcs.Repo.Cycles(info.ID, "calls")
+	cycles, err := svcs.Repo.cycles(info.ID, "calls")
 	if err != nil {
 		t.Fatal(err)
 	}
-	layers, err := svcs.Repo.Topology(info.ID, "calls")
+	layers, err := svcs.Repo.topology(info.ID, "calls")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestRepoServiceGraphs(t *testing.T) {
 	if len(layers) == 0 {
 		t.Fatal("topology should return at least one layer")
 	}
-	imports, err := svcs.Repo.Impact(info.ID, "imports", "fmt", true, 0, 10, "")
+	imports, err := svcs.Repo.impact(info.ID, "imports", "fmt", true, 0, 10, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func TestRepoServiceOutlineIndexedAndFallback(t *testing.T) {
 	}
 	waitReady(t, svcs, info.ID)
 
-	outline, err := svcs.Repo.Outline(info.ID, mainPath, false)
+	outline, err := svcs.Repo.outline(info.ID, mainPath, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestRepoServiceOutlineIndexedAndFallback(t *testing.T) {
 		t.Fatalf("outline should contain Main: %s", jsonOut(outline))
 	}
 
-	full, err := svcs.Repo.Outline(info.ID, mainPath, true)
+	full, err := svcs.Repo.outline(info.ID, mainPath, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestRepoServiceOutlineIndexedAndFallback(t *testing.T) {
 		t.Fatalf("want ast_fallback outline with text, got %#v", full)
 	}
 
-	report, err := svcs.Repo.Analyze(info.ID, mainPath)
+	report, err := svcs.Repo.analyze(info.ID, mainPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,14 +262,14 @@ func TestRepoServiceStaleFileReindexed(t *testing.T) {
 	if err := os.WriteFile(mainPath, []byte(newMain), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	outline, err := svcs.Repo.Outline(info.ID, mainPath, false)
+	outline, err := svcs.Repo.outline(info.ID, mainPath, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(jsonOut(outline), "Main2") {
 		t.Fatalf("stale file should be reindexed before serving outline: %s", jsonOut(outline))
 	}
-	info, err = svcs.Repo.Status(info.ID)
+	info, err = svcs.Repo.status(info.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +287,7 @@ func TestRepoServiceUnused(t *testing.T) {
 	}
 	waitReady(t, svcs, info.ID)
 
-	res, err := svcs.Repo.Unused(info.ID, 0)
+	res, err := svcs.Repo.unused(info.ID, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +327,7 @@ func TestRepoServiceRefreshCoalesced(t *testing.T) {
 	lock := svcs.Repo.refreshLock(info.ID)
 	lock.Lock() // simulate an in-flight refresh
 	defer lock.Unlock()
-	res, err := svcs.Repo.Refresh(context.Background(), info.ID, nil)
+	res, err := svcs.Repo.refresh(context.Background(), info.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +358,7 @@ func TestRepoServiceUsagePagination(t *testing.T) {
 	cursor := ""
 	total := 0
 	for {
-		page, err := svcs.Repo.UsagePage(info.ID, "token", cursor, 500)
+		page, err := svcs.Repo.usagePage(info.ID, "token", cursor, 500)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -386,10 +386,10 @@ func TestRepoServiceUsagePagination(t *testing.T) {
 	if err := os.WriteFile(path, []byte(src+"// touch\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svcs.Repo.Refresh(context.Background(), info.ID, nil); err != nil {
+	if _, err := svcs.Repo.refresh(context.Background(), info.ID, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svcs.Repo.UsagePage(info.ID, "token", cursor, 500); err == nil {
+	if _, err := svcs.Repo.usagePage(info.ID, "token", cursor, 500); err == nil {
 		t.Fatal("stale cursor must be rejected after index version bump")
 	}
 }
@@ -403,7 +403,7 @@ func TestRepoServiceWatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitReady(t, svcs, info.ID)
-	st, err := svcs.Repo.Status(info.ID)
+	st, err := svcs.Repo.status(info.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,7 +419,7 @@ func TestRepoServiceWatch(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	var v2 uint64
 	for time.Now().Before(deadline) {
-		st, _ = svcs.Repo.Status(info.ID)
+		st, _ = svcs.Repo.status(info.ID)
 		if st.Version > v1 {
 			v2 = st.Version
 			break
@@ -431,7 +431,7 @@ func TestRepoServiceWatch(t *testing.T) {
 	}
 	// one edit -> one bump: further ticks must not bump again
 	time.Sleep(150 * time.Millisecond)
-	st, err = svcs.Repo.Status(info.ID)
+	st, err = svcs.Repo.status(info.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -465,7 +465,7 @@ func TestRepoServiceRestoreOnBoot(t *testing.T) {
 	}
 	waitReady(t, svcs1, info.ID)
 	waitSnapshot(t, svcs1.Repo.snapshotPath(mustAbs(t, dir)))
-	st1, err := svcs1.Repo.Status(info.ID)
+	st1, err := svcs1.Repo.status(info.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -482,14 +482,14 @@ func TestRepoServiceRestoreOnBoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitReady(t, svcs2, info2.ID)
-	st2, err := svcs2.Repo.Status(info2.ID)
+	st2, err := svcs2.Repo.status(info2.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !st2.Restored || st2.Files != 2 {
 		t.Fatalf("second boot must restore: %#v", st2)
 	}
-	usages, err := svcs2.Repo.Usages(info2.ID, "Helper")
+	usages, err := svcs2.Repo.usages(info2.ID, "Helper")
 	if err != nil || len(usages) < 4 {
 		t.Fatalf("restored index must answer queries: %#v %v", usages, err)
 	}
@@ -503,7 +503,7 @@ func TestRepoServiceRestoreOnBoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitReady(t, svcs3, info3.ID)
-	st3, err := svcs3.Repo.Status(info3.ID)
+	st3, err := svcs3.Repo.status(info3.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -541,7 +541,7 @@ func TestRepoServiceRestoreStaleFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitReady(t, svcs2, info2.ID)
-	st2, err := svcs2.Repo.Status(info2.ID)
+	st2, err := svcs2.Repo.status(info2.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -550,7 +550,7 @@ func TestRepoServiceRestoreStaleFile(t *testing.T) {
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if usages, _ := svcs2.Repo.Usages(info2.ID, "Main2"); len(usages) > 0 {
+		if usages, _ := svcs2.Repo.usages(info2.ID, "Main2"); len(usages) > 0 {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -576,7 +576,7 @@ func TestRepoServiceFindAllModes(t *testing.T) {
 	}
 	waitReady(t, svcs, info.ID)
 
-	callers, err := svcs.Repo.Callers(info.ID, "Helper", 0)
+	callers, err := svcs.Repo.callers(info.ID, "Helper", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -591,7 +591,7 @@ func TestRepoServiceFindAllModes(t *testing.T) {
 		t.Fatalf("unexpected caller counts: %#v", callers)
 	}
 
-	defs, err := svcs.Repo.Definitions(info.ID, "Helper", false, 0)
+	defs, err := svcs.Repo.definitions(info.ID, "Helper", false, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -605,7 +605,7 @@ func TestRepoServiceFindAllModes(t *testing.T) {
 		t.Fatalf("Helper definition missing: %#v", defs)
 	}
 
-	imports, err := svcs.Repo.Definitions(info.ID, "fmt", true, 0)
+	imports, err := svcs.Repo.definitions(info.ID, "fmt", true, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -616,10 +616,10 @@ func TestRepoServiceFindAllModes(t *testing.T) {
 
 func TestRepoServiceUnknownID(t *testing.T) {
 	svcs := testRepoServices(t, 1<<30)
-	if _, err := svcs.Repo.Status("nope"); err == nil {
+	if _, err := svcs.Repo.status("nope"); err == nil {
 		t.Fatal("want error for unknown repo id")
 	}
-	if _, err := svcs.Repo.Usages("nope", "x"); err == nil {
+	if _, err := svcs.Repo.usages("nope", "x"); err == nil {
 		t.Fatal("want error for unknown repo id on usages")
 	}
 }
@@ -669,7 +669,7 @@ func TestRepoServiceResolveIndexPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := svcs.Repo.Drop(info.ID); err != nil {
+	if err := svcs.Repo.drop(info.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := svcs.Repo.ResolveIndex(dir); ok {
