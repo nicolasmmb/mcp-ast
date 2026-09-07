@@ -72,15 +72,16 @@ type MemoryStore struct {
 }
 
 type repo struct {
-	info       Info
-	files      map[string]*IndexedFile // path -> facts+meta
-	usages     map[string]map[string][]engine.UsageMatch
-	fileUsages map[string]map[string][]engine.UsageMatch // file -> name -> refs (for O(1) removal)
-	complexity []engine.RankedComplexity
-	fileMemory map[string]int64
-	calls      CallGraph
-	imports    ImportGraph
-	errors     map[string]string
+	info        Info
+	files       map[string]*IndexedFile // path -> facts+meta
+	usages      map[string]map[string][]engine.UsageMatch
+	fileUsages  map[string]map[string][]engine.UsageMatch // file -> name -> refs (for O(1) removal)
+	byCanonical map[string]map[string][]engine.UsageMatch
+	complexity  []engine.RankedComplexity
+	fileMemory  map[string]int64
+	calls       CallGraph
+	imports     ImportGraph
+	errors      map[string]string
 }
 
 func NewMemory(limit int64) *MemoryStore {
@@ -140,6 +141,7 @@ func (s *MemoryStore) Replace(id string, files map[string]IndexedFile, errs map[
 		memory += r.insert(p, &cp)
 	}
 	r.errors = errs
+	r.enrich()
 	r.calls = buildCallGraph(r.files)
 	r.imports = buildImportGraph(r.files)
 	r.info.MemoryBytes = memory
@@ -176,6 +178,7 @@ func (s *MemoryStore) Apply(id string, changes ChangeSet) (Info, error) {
 		r.insertNew(p, &f)
 	}
 	sort.Slice(r.complexity, func(i, j int) bool { return cmpComplexity(r.complexity[i], r.complexity[j]) })
+	r.enrich()
 	r.calls = buildCallGraph(r.files)
 	r.imports = buildImportGraph(r.files)
 	info := r.info
@@ -273,8 +276,15 @@ func (s *MemoryStore) Usages(id, name string) ([]engine.UsageMatch, bool) {
 	if !ok {
 		return nil, false
 	}
+	if strings.Contains(name, "|") {
+		return flattenUsages(r.byCanonical[name]), true
+	}
+	return flattenUsages(r.usages[name]), true
+}
+
+func flattenUsages(byFile map[string][]engine.UsageMatch) []engine.UsageMatch {
 	out := make([]engine.UsageMatch, 0)
-	for _, refs := range r.usages[name] {
+	for _, refs := range byFile {
 		out = append(out, refs...)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -283,7 +293,7 @@ func (s *MemoryStore) Usages(id, name string) ([]engine.UsageMatch, bool) {
 		}
 		return out[i].Line < out[j].Line
 	})
-	return out, true
+	return out
 }
 
 func (s *MemoryStore) Complexity(id string, limit int) ([]engine.RankedComplexity, bool) {
@@ -429,6 +439,53 @@ func (r *repo) insertNew(path string, f *IndexedFile) {
 	cp := *f
 	r.files[path] = &cp
 	_ = r.insert(path, &cp)
+}
+
+// enrich stamps canonical identities on usages. A usage gets the canonical
+// key language|file|kind|name when its name has exactly one declaration in
+// the repo (not counting imports); otherwise it stays empty (ambiguous).
+// It also rebuilds the canonical postings.
+func (r *repo) enrich() {
+	declCount := map[string]int{}
+	declCanonical := map[string]string{}
+	for p, f := range r.files {
+		for kind, syms := range f.Facts.Symbols {
+			if kind == "imports" {
+				continue
+			}
+			for _, s := range syms {
+				name := strings.TrimSpace(s.Name)
+				if name == "" {
+					continue
+				}
+				declCount[name]++
+				if _, ok := declCanonical[name]; !ok {
+					declCanonical[name] = f.Facts.Language + "|" + p + "|" + kind + "|" + name
+				}
+			}
+		}
+	}
+	r.byCanonical = make(map[string]map[string][]engine.UsageMatch)
+	for name, byFile := range r.usages {
+		canonical := ""
+		if declCount[name] == 1 {
+			canonical = declCanonical[name]
+		}
+		for file, refs := range byFile {
+			for i := range refs {
+				refs[i].Canonical = canonical
+			}
+			if canonical == "" {
+				continue
+			}
+			c := r.byCanonical[canonical]
+			if c == nil {
+				c = make(map[string][]engine.UsageMatch)
+				r.byCanonical[canonical] = c
+			}
+			c[file] = append(c[file], refs...)
+		}
+	}
 }
 
 func (s *MemoryStore) estimateMemory(r *repo) int64 {

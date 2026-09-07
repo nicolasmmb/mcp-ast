@@ -109,6 +109,53 @@ func TestMemoryStoreUnused(t *testing.T) {
 	}
 }
 
+func TestCanonicalResolution(t *testing.T) {
+	store := NewMemory(0)
+	info := store.Create("/repo")
+	a := fileFacts("/repo/a.go", "go")
+	a.Facts.Symbols = map[string][]engine.Symbol{"functions": {{Name: "Save"}}}
+	a.Facts.Usages = []engine.UsageMatch{
+		{File: "/repo/a.go", Name: "Save", Line: 1, Kind: "definition"},
+		{File: "/repo/a.go", Name: "Save", Line: 2, Kind: "call-site", Caller: "RunA"},
+	}
+	b := fileFacts("/repo/b.go", "go")
+	b.Facts.Symbols = map[string][]engine.Symbol{"functions": {{Name: "Save"}}}
+	b.Facts.Usages = []engine.UsageMatch{
+		{File: "/repo/b.go", Name: "Save", Line: 1, Kind: "definition"},
+		{File: "/repo/b.go", Name: "Save", Line: 2, Kind: "call-site", Caller: "RunB"},
+	}
+	if _, err := store.Replace(info.ID, map[string]IndexedFile{"/repo/a.go": a, "/repo/b.go": b}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// two declarations: lookup returns both, canonical empty (ambiguous)
+	all, ok := store.Usages(info.ID, "Save")
+	if !ok || len(all) != 4 {
+		t.Fatalf("want 4 Save usages, got %#v", all)
+	}
+	for _, u := range all {
+		if u.Canonical != "" {
+			t.Fatalf("ambiguous Save should have empty canonical: %#v", u)
+		}
+	}
+
+	// delete b.go: Save becomes unambiguous, resolution turns exact
+	if _, err := store.Apply(info.ID, ChangeSet{Deleted: []string{"/repo/b.go"}}); err != nil {
+		t.Fatal(err)
+	}
+	canonical := "go|/repo/a.go|functions|Save"
+	byCanonical, ok := store.Usages(info.ID, canonical)
+	if !ok || len(byCanonical) != 2 {
+		t.Fatalf("want 2 usages for canonical %q, got %#v", canonical, byCanonical)
+	}
+	calls, _ := store.Calls(info.ID)
+	for _, e := range calls.ByCallee["Save"] {
+		if e.Resolution != "exact" {
+			t.Fatalf("Save should resolve exact after delete, got %#v", e)
+		}
+	}
+}
+
 func TestParseMemoryLimit(t *testing.T) {
 	for _, bad := range []string{"2048", "2gb", "2048mbx", "-1mb", ""} {
 		if _, err := ParseMemoryLimit(bad); err == nil {

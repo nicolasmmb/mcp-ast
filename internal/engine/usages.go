@@ -12,13 +12,14 @@ import (
 
 // UsageMatch is one occurrence of a symbol name, classified by role.
 type UsageMatch struct {
-	File   string `json:"file"`
-	Name   string `json:"name,omitempty"`
-	Line   int    `json:"line"`
-	Col    int    `json:"col"`
-	Text   string `json:"text"`
-	Kind   string `json:"kind"`             // "definition", "reference" or "call-site"
-	Caller string `json:"caller,omitempty"` // function containing the call (call-sites only)
+	File      string `json:"file"`
+	Name      string `json:"name,omitempty"`
+	Canonical string `json:"canonical,omitempty"` // language|file|kind|name when unambiguous
+	Line      int    `json:"line"`
+	Col       int    `json:"col"`
+	Text      string `json:"text"`
+	Kind      string `json:"kind"`             // "definition", "reference" or "call-site"
+	Caller    string `json:"caller,omitempty"` // function containing the call (call-sites only)
 }
 
 // Usages finds every occurrence of name across the directory's recognized

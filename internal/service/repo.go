@@ -250,7 +250,13 @@ func (s *RepoService) Impact(id, graph, target string, reverse bool, depth, limi
 	if !nodes[target] {
 		return repoindex.ImpactResult{}, fmt.Errorf("target %q not found in %s graph", target, graph)
 	}
-	return repoindex.Impact(adj, target, depth, limit), nil
+	res := repoindex.Impact(adj, target, depth, limit)
+	if graph == "calls" {
+		if g, ok := s.store.Calls(id); ok {
+			res.ResolutionCounts = g.ResolutionCounts()
+		}
+	}
+	return res, nil
 }
 
 func (s *RepoService) Cycles(id, graph string) ([][]string, error) {

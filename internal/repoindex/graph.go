@@ -7,10 +7,11 @@ import (
 )
 
 type CallEdge struct {
-	File   string `json:"file"`
-	Caller string `json:"caller"`
-	Callee string `json:"callee"`
-	Count  int    `json:"count"`
+	File       string `json:"file"`
+	Caller     string `json:"caller"`
+	Callee     string `json:"callee"`
+	Count      int    `json:"count"`
+	Resolution string `json:"resolution,omitempty"` // exact | candidate | unresolved
 }
 
 type ImportEdge struct {
@@ -31,8 +32,33 @@ type ImportGraph struct {
 
 // buildCallGraph aggregates call-sites from indexed usages: one CallEdge per
 // (file, caller, callee) pair with a count, indexed by caller name and callee
-// name. This is a lexical, not semantic, graph.
+// name. This is a lexical, not semantic, graph. Each edge carries a
+// resolution: exact when the callee name has exactly one declaration in the
+// index, candidate when it has several, unresolved when none.
 func buildCallGraph(files map[string]*IndexedFile) CallGraph {
+	declCount := map[string]int{}
+	for _, f := range files {
+		for kind, syms := range f.Facts.Symbols {
+			if kind == "imports" {
+				continue
+			}
+			for _, s := range syms {
+				if name := strings.TrimSpace(s.Name); name != "" {
+					declCount[name]++
+				}
+			}
+		}
+	}
+	resolution := func(callee string) string {
+		switch declCount[callee] {
+		case 1:
+			return "exact"
+		case 0:
+			return "unresolved"
+		default:
+			return "candidate"
+		}
+	}
 	agg := map[string]*CallEdge{}
 	for path, f := range files {
 		for _, u := range f.Facts.Usages {
@@ -42,7 +68,7 @@ func buildCallGraph(files map[string]*IndexedFile) CallGraph {
 			key := path + "|" + u.Caller + "|" + u.Name
 			e := agg[key]
 			if e == nil {
-				e = &CallEdge{File: path, Caller: u.Caller, Callee: u.Name}
+				e = &CallEdge{File: path, Caller: u.Caller, Callee: u.Name, Resolution: resolution(u.Name)}
 				agg[key] = e
 			}
 			e.Count++
@@ -146,6 +172,21 @@ func resolveLocalImport(fromPath string, files map[string]*IndexedFile, spec str
 	return "", false
 }
 
+// ResolutionCounts returns the edge count per resolution kind.
+func (g *CallGraph) ResolutionCounts() map[string]int {
+	out := map[string]int{}
+	for _, edges := range g.ByCaller {
+		for _, e := range edges {
+			kind := e.Resolution
+			if kind == "" {
+				kind = "unresolved"
+			}
+			out[kind]++
+		}
+	}
+	return out
+}
+
 // ImpactNode is one dependant found by impact search.
 type ImpactNode struct {
 	Name     string `json:"name"`
@@ -153,8 +194,9 @@ type ImpactNode struct {
 }
 
 type ImpactResult struct {
-	Nodes     []ImpactNode `json:"nodes"`
-	Truncated bool         `json:"truncated,omitempty"`
+	Nodes            []ImpactNode   `json:"nodes"`
+	Truncated        bool           `json:"truncated,omitempty"`
+	ResolutionCounts map[string]int `json:"resolution_counts,omitempty"`
 }
 
 // Impact walks the graph from target. Reverse direction answers "who depends
