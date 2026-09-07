@@ -11,7 +11,7 @@ Premissas adotadas:
 
 ---
 
-## S1 — Métodos por caminho no serviço — [DOING]
+## S1 — Métodos por caminho no serviço — [DONE]
 
 - [x] T1.1 Registro interno `root → id` no `RepoService` (path normalizado com `filepath.Abs`).
 - [x] T1.2 `ResolveIndex(path) (Info, bool)`: maior prefixo; só `state=ready`.
@@ -24,14 +24,14 @@ Premissas adotadas:
 
 ---
 
-## S2 — Boot com `-repo`, cache e watch — [PENDING]
+## S2 — Boot com `-repo`, cache e watch — [DONE]
 
-- [ ] T2.1 Flag repetível `-repo <dir>` (valida diretório existente).
-- [ ] T2.2 Boot chama `Repo.Index` para cada `-repo`; sem flag, nada é indexado.
-- [ ] T2.3 `-watch` default `true` (desliga com `-watch=false`).
-- [ ] T2.4 `-watch-interval` default `2s`.
-- [ ] T2.5 Save/restore de snapshot sempre ligados; `-cache-dir` só override.
-- [ ] T2.6 Testes de flag (lista repetível; diretório inexistente).
+- [x] T2.1 Flag repetível `-repo <dir>` (valida diretório existente).
+- [x] T2.2 Boot chama `Repo.Index` para cada `-repo`; sem flag, nada é indexado.
+- [x] T2.3 `-watch` default `true` (desliga com `-watch=false`).
+- [x] T2.4 `-watch-interval` default `2s`.
+- [x] T2.5 Save/restore de snapshot sempre ligados; `-cache-dir` só override.
+- [x] T2.6 Testes de flag (lista repetível; diretório inexistente).
 
 **Pronto quando:** `-repo /a -repo /b` indexa ambos no boot; segundo boot restaura (`restored: true`); sem `-repo`, nada roda.
 **Validação:** `go test ./cmd/... ./internal/service` + smoke de boot.
@@ -83,8 +83,8 @@ Premissas adotadas:
 
 | História | Status | Commit | Validação |
 |---|---|---|---|
-| S1 | PENDING | — | — |
-| S2 | PENDING | — | — |
+| S1 | DONE | 422754f | `go test ./...`, `go vet`, gates verdes |
+| S2 | DONE | (neste commit) | testes + smoke de boot: `state=ready restored=true` |
 | S3 | PENDING | — | — |
 | S4 | PENDING | — | — |
 | S5 | PENDING | — | — |
