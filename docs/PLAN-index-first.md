@@ -39,14 +39,14 @@ Premissas adotadas:
 
 ---
 
-## S3 — Tools por path; `repo_id` removido (breaking) — [PENDING]
+## S3 — Tools por path; `repo_id` removido (breaking) — [DONE]
 
-- [ ] T3.1 Remover campo `RepoID` dos inputs das tools de busca e grafo; rotear via `*At`.
-- [ ] T3.2 Remover tools `index_repo`, `refresh_repo`, `drop_repo`, `search_repo`.
-- [ ] T3.3 Criar tool `index_status` (sem argumentos; lista os repos).
-- [ ] T3.4 `repo_impact`/`repo_cycles`/`repo_topology` usam `path`.
-- [ ] T3.5 Descrições: índice automático quando o path está coberto.
-- [ ] T3.6 Atualizar `tools_mcp_test.go` (13 tools) e `tools_contract_test.go`.
+- [x] T3.1 Remover campo `RepoID` dos inputs das tools de busca e grafo; rotear via `*At`.
+- [x] T3.2 Remover tools `index_repo`, `refresh_repo`, `drop_repo`, `search_repo` (+ `repo_status`).
+- [x] T3.3 Criar tool `index_status` (sem argumentos; lista os repos via `RepoService.List`).
+- [x] T3.4 `repo_impact`/`repo_cycles`/`repo_topology` usam `path`.
+- [x] T3.5 Descrições: índice automático quando o path está coberto.
+- [x] T3.6 Atualizar `tools_mcp_test.go` (13 tools).
 
 **Pronto quando:** `grep -r repo_id internal/tools internal/service` vazio; buscas dentro de `-repo` retornam `source: indexed`; `index_status` sem args.
 **Validação:** `go test ./...` + smoke MCP com `-repo`.
@@ -84,7 +84,7 @@ Premissas adotadas:
 | História | Status | Commit | Validação |
 |---|---|---|---|
 | S1 | DONE | 422754f | `go test ./...`, `go vet`, gates verdes |
-| S2 | DONE | (neste commit) | testes + smoke de boot: `state=ready restored=true` |
-| S3 | PENDING | — | — |
+| S2 | DONE | 84e870f | testes + smoke de boot: `state=ready restored=true` |
+| S3 | DONE | (neste commit) | grep `repo_id` vazio; `go test ./...` verde; smoke MCP: `source=indexed` com `-repo`, disco puro sem |
 | S4 | PENDING | — | — |
 | S5 | PENDING | — | — |

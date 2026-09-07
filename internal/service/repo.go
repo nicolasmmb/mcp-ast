@@ -138,6 +138,18 @@ func (s *RepoService) Drop(id string) error {
 	return nil
 }
 
+// List returns the current info of every registered repository.
+func (s *RepoService) List() []repoindex.Info {
+	var out []repoindex.Info
+	s.roots.Range(func(_, v any) bool {
+		if info, ok := s.store.Info(v.(string)); ok {
+			out = append(out, info)
+		}
+		return true
+	})
+	return out
+}
+
 // ResolveIndex maps a file or directory path to the ready index whose root
 // is its longest prefix. Returns ok=false when no configured root covers
 // the path or the covering index is not ready yet.
