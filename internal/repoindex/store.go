@@ -43,6 +43,8 @@ type Info struct {
 	Files       int               `json:"files_indexed"`
 	Errors      int               `json:"files_failed"`
 	LastErrors  map[string]string `json:"last_errors,omitempty"`
+	Watch       bool              `json:"watch,omitempty"`
+	LastSync    time.Time         `json:"last_sync,omitempty"`
 	UpdatedAt   time.Time         `json:"updated_at"`
 	MemoryBytes int64             `json:"memory_used_bytes"`
 	MemoryLimit int64             `json:"memory_budget_bytes"`
@@ -53,6 +55,7 @@ type Info struct {
 type Store interface {
 	Create(root string) Info
 	SetState(id, state string) (Info, error)
+	SetWatch(id string, on bool) (Info, error)
 	Replace(id string, files map[string]IndexedFile, errs map[string]string) (Info, error)
 	Apply(id string, changes ChangeSet) (Info, error)
 	Info(id string) (Info, bool)
@@ -217,6 +220,18 @@ func (s *MemoryStore) SetState(id, state string) (Info, error) {
 	return r.info, nil
 }
 
+// SetWatch toggles automatic refresh; every sync afterwards stamps LastSync.
+func (s *MemoryStore) SetWatch(id string, on bool) (Info, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.repos[id]
+	if !ok {
+		return Info{}, ErrNotFound
+	}
+	r.info.Watch = on
+	return r.info, nil
+}
+
 // Replace rebuilds the whole index from scratch (initial index or full rebuild).
 func (s *MemoryStore) Replace(id string, files map[string]IndexedFile, errs map[string]string) (Info, error) {
 	s.mu.Lock()
@@ -254,6 +269,9 @@ func (s *MemoryStore) Replace(id string, files map[string]IndexedFile, errs map[
 		r.errors = map[string]string{}
 	}
 	r.info.LastErrors = cappedErrors(r.errors)
+	if r.info.Watch {
+		r.info.LastSync = time.Now().UTC()
+	}
 	r.enrich()
 	r.calls = buildCallGraph(r.filesByPath())
 	r.imports = buildImportGraph(r.filesByPath())
@@ -315,6 +333,9 @@ func (s *MemoryStore) Apply(id string, changes ChangeSet) (Info, error) {
 	info.MemoryBytes = s.estimateMemory(r)
 	info.UpdatedAt = time.Now().UTC()
 	info.LastErrors = cappedErrors(r.errors)
+	if info.Watch {
+		info.LastSync = time.Now().UTC()
+	}
 	if s.limit > 0 && info.MemoryBytes > s.limit {
 		info.State = "partial"
 		info.Files = 0

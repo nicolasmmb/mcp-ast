@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"time"
 
 	"mcp-ast/internal/engine"
 	"mcp-ast/internal/lang"
@@ -19,9 +20,20 @@ import (
 var errUnstable = errors.New("file changed while being indexed")
 
 type RepoService struct {
-	eng          *engine.Engine
-	store        repoindex.Store
-	refreshLocks sync.Map // repo id -> *sync.Mutex (refresh coalescing)
+	eng           *engine.Engine
+	store         repoindex.Store
+	refreshLocks  sync.Map // repo id -> *sync.Mutex (refresh coalescing)
+	watchLangs    sync.Map // repo id -> languages used at index time
+	watchInterval time.Duration
+}
+
+// SetWatchInterval enables the polling watcher when interval > 0. Watching
+// uses the same incremental Refresh path: a tick with no delta is a no-op, a
+// small delta applies incrementally, a mass change triggers the full rebuild
+// threshold. ponytail: polling, not fsnotify; switch to fsnotify if
+// event-driven latency becomes a requirement.
+func (s *RepoService) SetWatchInterval(interval time.Duration) {
+	s.watchInterval = interval
 }
 
 func (s *RepoService) refreshLock(id string) *sync.Mutex {
@@ -40,7 +52,31 @@ func (s *RepoService) Index(ctx context.Context, dir string, languages []string)
 	}
 	info := s.store.Create(root)
 	go s.build(context.WithoutCancel(ctx), info.ID, root, filters)
+	if s.watchInterval > 0 {
+		_, _ = s.store.SetWatch(info.ID, true)
+		s.startWatch(info.ID, languages)
+	}
 	return info, nil
+}
+
+// startWatch polls the repository every watchInterval and applies the
+// incremental refresh. The loop exits when the repo is dropped.
+func (s *RepoService) startWatch(id string, languages []string) {
+	s.watchLangs.Store(id, languages)
+	go func() {
+		ticker := time.NewTicker(s.watchInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			info, ok := s.store.Info(id)
+			if !ok {
+				return
+			}
+			langs, _ := s.watchLangs.Load(id)
+			names, _ := langs.([]string)
+			_ = info
+			_, _ = s.Refresh(context.Background(), id, names)
+		}
+	}()
 }
 
 func (s *RepoService) Drop(id string) error {
@@ -108,6 +144,9 @@ func (s *RepoService) Refresh(ctx context.Context, id string, languages []string
 	}
 	if len(info.Root) == 0 {
 		return repoindex.Info{}, fmt.Errorf("repository %q has no root", id)
+	}
+	if info.State == "building" || info.State == "refreshing" {
+		return info, nil
 	}
 	lock := s.refreshLock(id)
 	if !lock.TryLock() {

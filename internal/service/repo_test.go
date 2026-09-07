@@ -394,6 +394,52 @@ func TestRepoServiceUsagePagination(t *testing.T) {
 	}
 }
 
+func TestRepoServiceWatch(t *testing.T) {
+	svcs := testRepoServices(t, 1<<30)
+	svcs.Repo.SetWatchInterval(30 * time.Millisecond)
+	dir, mainPath, _ := writeFixture(t)
+	info, err := svcs.Repo.Index(context.Background(), dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitReady(t, svcs, info.ID)
+	st, err := svcs.Repo.Status(info.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.Watch {
+		t.Fatal("watch should be enabled after index_repo")
+	}
+	v1 := st.Version
+
+	newMain := strings.Replace(fixtureMain, "func Main()", "func Main2()", 1)
+	if err := os.WriteFile(mainPath, []byte(newMain), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	var v2 uint64
+	for time.Now().Before(deadline) {
+		st, _ = svcs.Repo.Status(info.ID)
+		if st.Version > v1 {
+			v2 = st.Version
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if v2 == 0 {
+		t.Fatal("watch did not pick up the change")
+	}
+	// one edit -> one bump: further ticks must not bump again
+	time.Sleep(150 * time.Millisecond)
+	st, err = svcs.Repo.Status(info.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Version != v2 {
+		t.Fatalf("watch applied extra bumps: %d -> %d", v2, st.Version)
+	}
+}
+
 func TestRepoServiceUnknownID(t *testing.T) {
 	svcs := testRepoServices(t, 1<<30)
 	if _, err := svcs.Repo.Status("nope"); err == nil {

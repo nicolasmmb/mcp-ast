@@ -37,6 +37,8 @@ func main() {
 	logPath := flag.String("log", "", "write log to file (append)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	maxMemory := flag.String("max-memory", "auto", "repository index memory limit in MB, or auto")
+	watch := flag.Bool("watch", false, "keep repository indexes fresh automatically (polling)")
+	watchInterval := flag.Duration("watch-interval", 5*time.Second, "watch poll interval")
 	flag.Parse()
 
 	if *showVersion {
@@ -64,7 +66,11 @@ func main() {
 	logger.Info("started", "version", version, "tool_timeout", timeout.String(), "languages", reg.List(), "log", *logPath)
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "ast-mcp", Version: version}, nil)
-	tools.Register(server, service.NewWithStore(engine.New(reg), repoindex.NewMemory(memoryLimit)))
+	svcs := service.NewWithStore(engine.New(reg), repoindex.NewMemory(memoryLimit))
+	if *watch {
+		svcs.Repo.SetWatchInterval(*watchInterval)
+	}
+	tools.Register(server, svcs)
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		log.Fatal(err)
