@@ -285,7 +285,55 @@ func fileDigest(p string) ([32]byte, error) {
 
 // --- graph queries ---------------------------------------------------------
 
-func (s *RepoService) Impact(id, graph, target string, reverse bool, depth, limit int) (repoindex.ImpactResult, error) {
+// UsagePage is one page of indexed usages with a cursor for the next page.
+type UsagePage struct {
+	Matches    []engine.UsageMatch `json:"matches"`
+	NextCursor string              `json:"next_cursor,omitempty"`
+	Truncated  bool                `json:"truncated,omitempty"`
+}
+
+// UsagePage returns one page of usages for name (or a canonical key
+// containing '|'), ordered by file then line. limit is the page size.
+func (s *RepoService) UsagePage(id, name, cursor string, limit int) (*UsagePage, error) {
+	info, ok := s.store.Info(id)
+	if !ok {
+		return nil, fmt.Errorf("unknown repository %q", id)
+	}
+	c, err := repoindex.CheckCursor(cursor, info.Version)
+	if err != nil {
+		return nil, err
+	}
+	matches, ok := s.store.Usages(id, name)
+	if !ok {
+		return nil, fmt.Errorf("unknown repository %q", id)
+	}
+	if limit <= 0 {
+		limit = 500
+	}
+	page := &UsagePage{}
+	if c.Offset > len(matches) {
+		c.Offset = len(matches)
+	}
+	end := c.Offset + limit
+	if end > len(matches) {
+		end = len(matches)
+	} else {
+		page.Truncated = true
+		page.NextCursor = repoindex.EncodeCursor(info.Version, end)
+	}
+	page.Matches = append([]engine.UsageMatch(nil), matches[c.Offset:end]...)
+	return page, nil
+}
+
+func (s *RepoService) Impact(id, graph, target string, reverse bool, depth, limit int, cursor string) (repoindex.ImpactResult, error) {
+	info, ok := s.store.Info(id)
+	if !ok {
+		return repoindex.ImpactResult{}, fmt.Errorf("unknown repository %q", id)
+	}
+	c, err := repoindex.CheckCursor(cursor, info.Version)
+	if err != nil {
+		return repoindex.ImpactResult{}, err
+	}
 	adj, nodes, err := s.graphData(id, graph, reverse)
 	if err != nil {
 		return repoindex.ImpactResult{}, err
@@ -293,7 +341,13 @@ func (s *RepoService) Impact(id, graph, target string, reverse bool, depth, limi
 	if !nodes[target] {
 		return repoindex.ImpactResult{}, fmt.Errorf("target %q not found in %s graph", target, graph)
 	}
-	res := repoindex.Impact(adj, target, depth, limit)
+	if limit <= 0 {
+		limit = 512
+	}
+	res := repoindex.Impact(adj, target, depth, limit, c.Offset)
+	if res.Truncated {
+		res.NextCursor = repoindex.EncodeCursor(info.Version, c.Offset+limit)
+	}
 	if graph == "calls" {
 		if g, ok := s.store.Calls(id); ok {
 			res.ResolutionCounts = g.ResolutionCounts()
@@ -477,7 +531,7 @@ func (s *RepoService) FindUsages(id, name string, q FindQuery) (*FindResult, err
 	}
 	res := &FindResult{Language: "indexed", Mode: string(q.Mode), Matches: matches, Kinds: usageKindsList(kinds)}
 	if q.GroupByFile {
-		res.Files = groupUsageByFile(matches)
+		res.Files = GroupUsageByFile(matches)
 	}
 	return res, nil
 }

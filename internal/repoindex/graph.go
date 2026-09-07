@@ -196,19 +196,21 @@ type ImpactNode struct {
 type ImpactResult struct {
 	Nodes            []ImpactNode   `json:"nodes"`
 	Truncated        bool           `json:"truncated,omitempty"`
+	NextCursor       string         `json:"next_cursor,omitempty"`
 	ResolutionCounts map[string]int `json:"resolution_counts,omitempty"`
 }
 
 // Impact walks the graph from target. Reverse direction answers "who depends
 // on this?", forward answers "what does this reference?". depth 0 = direct
-// only; limit caps nodes (0 = 512).
-func Impact(adj map[string][]string, target string, depth, limit int) ImpactResult {
+// only; limit caps the page size (0 = 512); offset pages into the
+// deterministic BFS order.
+func Impact(adj map[string][]string, target string, depth, limit, offset int) ImpactResult {
 	if limit <= 0 {
 		limit = 512
 	}
 	seen := map[string]int{target: 0}
 	level := []string{target}
-	result := ImpactResult{}
+	all := []ImpactNode{}
 	for d := 1; len(level) > 0; d++ {
 		if depth > 0 && d > depth {
 			break
@@ -220,22 +222,29 @@ func Impact(adj map[string][]string, target string, depth, limit int) ImpactResu
 					continue
 				}
 				seen[nb] = d
-				result.Nodes = append(result.Nodes, ImpactNode{Name: nb, Distance: d})
+				all = append(all, ImpactNode{Name: nb, Distance: d})
 				next = append(next, nb)
-				if len(result.Nodes) >= limit {
-					result.Truncated = true
-					return result
-				}
 			}
 		}
 		level = next
 	}
-	sort.Slice(result.Nodes, func(i, j int) bool {
-		if result.Nodes[i].Distance != result.Nodes[j].Distance {
-			return result.Nodes[i].Distance < result.Nodes[j].Distance
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].Distance != all[j].Distance {
+			return all[i].Distance < all[j].Distance
 		}
-		return result.Nodes[i].Name < result.Nodes[j].Name
+		return all[i].Name < all[j].Name
 	})
+	result := ImpactResult{}
+	if offset > len(all) {
+		offset = len(all)
+	}
+	end := offset + limit
+	if end >= len(all) {
+		end = len(all)
+	} else {
+		result.Truncated = true
+	}
+	result.Nodes = append([]ImpactNode(nil), all[offset:end]...)
 	return result
 }
 

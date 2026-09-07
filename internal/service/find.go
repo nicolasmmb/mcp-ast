@@ -30,15 +30,17 @@ type FindQuery struct {
 }
 
 type FindResult struct {
-	Language string                         `json:"language"`
-	Mode     string                         `json:"mode"`
-	Source   string                         `json:"source,omitempty"` // "indexed_heuristic" for repo unused
-	Kinds    []string                       `json:"kinds,omitempty"`
-	Matches  []engine.UsageMatch            `json:"matches,omitempty"`
-	Files    map[string][]engine.UsageMatch `json:"files,omitempty"`
-	Callers  []engine.Caller                `json:"callers,omitempty"`
-	Symbols  []engine.SearchMatch           `json:"symbols,omitempty"`
-	Errors   map[string]string              `json:"errors,omitempty"`
+	Language   string                         `json:"language"`
+	Mode       string                         `json:"mode"`
+	Source     string                         `json:"source,omitempty"` // "indexed_heuristic" for repo unused
+	Kinds      []string                       `json:"kinds,omitempty"`
+	Matches    []engine.UsageMatch            `json:"matches,omitempty"`
+	Files      map[string][]engine.UsageMatch `json:"files,omitempty"`
+	Callers    []engine.Caller                `json:"callers,omitempty"`
+	Symbols    []engine.SearchMatch           `json:"symbols,omitempty"`
+	Errors     map[string]string              `json:"errors,omitempty"`
+	NextCursor string                         `json:"next_cursor,omitempty"`
+	Truncated  bool                           `json:"truncated,omitempty"`
 }
 
 type FindService struct{ eng *engine.Engine }
@@ -64,7 +66,7 @@ func (s *FindService) Dir(ctx context.Context, q FindQuery) (*FindResult, error)
 			res.Matches = matches
 			res.Kinds = kinds
 			if q.GroupByFile {
-				res.Files = groupUsageByFile(matches)
+				res.Files = GroupUsageByFile(matches)
 			}
 			return nil
 		},
@@ -94,7 +96,7 @@ func (s *FindService) Dir(ctx context.Context, q FindQuery) (*FindResult, error)
 			mergeErrors(errs, localErrs)
 			res.Matches = matches
 			if q.GroupByFile {
-				res.Files = groupUsageByFile(matches)
+				res.Files = GroupUsageByFile(matches)
 			}
 			return nil
 		},
@@ -106,7 +108,7 @@ func (s *FindService) Dir(ctx context.Context, q FindQuery) (*FindResult, error)
 			mergeErrors(errs, localErrs)
 			res.Matches = matches
 			if q.GroupByFile {
-				res.Files = groupUsageByFile(matches)
+				res.Files = GroupUsageByFile(matches)
 			}
 			return nil
 		},
@@ -282,7 +284,7 @@ func sortUsageMatches(matches []engine.UsageMatch) {
 	})
 }
 
-func groupUsageByFile(matches []engine.UsageMatch) map[string][]engine.UsageMatch {
+func GroupUsageByFile(matches []engine.UsageMatch) map[string][]engine.UsageMatch {
 	if len(matches) == 0 {
 		return map[string][]engine.UsageMatch{}
 	}

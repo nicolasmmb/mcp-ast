@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -181,7 +183,7 @@ func TestRepoServiceGraphs(t *testing.T) {
 	}
 	waitReady(t, svcs, info.ID)
 
-	res, err := svcs.Repo.Impact(info.ID, "calls", "Helper", true, 0, 10)
+	res, err := svcs.Repo.Impact(info.ID, "calls", "Helper", true, 0, 10, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +202,7 @@ func TestRepoServiceGraphs(t *testing.T) {
 	if len(layers) == 0 {
 		t.Fatal("topology should return at least one layer")
 	}
-	imports, err := svcs.Repo.Impact(info.ID, "imports", "fmt", true, 0, 10)
+	imports, err := svcs.Repo.Impact(info.ID, "imports", "fmt", true, 0, 10, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,6 +333,64 @@ func TestRepoServiceRefreshCoalesced(t *testing.T) {
 	}
 	if res.State != "refreshing" {
 		t.Fatalf("concurrent refresh should coalesce into refreshing, got %q", res.State)
+	}
+}
+
+func TestRepoServiceUsagePagination(t *testing.T) {
+	svcs := testRepoServices(t, 1<<30)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "big.go")
+	src := "package app\nfunc F() {\n"
+	for i := 0; i < 5000; i++ {
+		src += "\t_ = token\n"
+	}
+	src += "}\n"
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info, err := svcs.Repo.Index(context.Background(), dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitReady(t, svcs, info.ID)
+
+	seen := map[string]bool{}
+	cursor := ""
+	total := 0
+	for {
+		page, err := svcs.Repo.UsagePage(info.ID, "token", cursor, 500)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range page.Matches {
+			key := fmt.Sprintf("%s:%d", m.File, m.Line)
+			if seen[key] {
+				t.Fatalf("duplicate across pages: %s", key)
+			}
+			seen[key] = true
+			total++
+		}
+		if !page.Truncated {
+			break
+		}
+		cursor = page.NextCursor
+		if cursor == "" {
+			t.Fatal("truncated page without next_cursor")
+		}
+	}
+	if total != 5000 {
+		t.Fatalf("want 5000 usages across pages, got %d", total)
+	}
+
+	// a stale cursor (older index version) must be rejected after an update
+	if err := os.WriteFile(path, []byte(src+"// touch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svcs.Repo.Refresh(context.Background(), info.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svcs.Repo.UsagePage(info.ID, "token", cursor, 500); err == nil {
+		t.Fatal("stale cursor must be rejected after index version bump")
 	}
 }
 

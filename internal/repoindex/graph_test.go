@@ -41,7 +41,7 @@ func TestImpactBFS(t *testing.T) {
 	adj := map[string][]string{
 		"Run": {"Helper"}, "Helper": {"Main"},
 	}
-	res := Impact(adj, "Run", 0, 0)
+	res := Impact(adj, "Run", 0, 0, 0)
 	if len(res.Nodes) != 2 {
 		t.Fatalf("want 2 dependants for Run, got %#v", res.Nodes)
 	}
@@ -55,9 +55,38 @@ func TestImpactBFS(t *testing.T) {
 
 func TestImpactLimit(t *testing.T) {
 	adj := map[string][]string{"A": {"B", "C"}}
-	res := Impact(adj, "A", 0, 1)
+	res := Impact(adj, "A", 0, 1, 0)
 	if !res.Truncated || len(res.Nodes) != 1 {
 		t.Fatalf("want truncated single node, got %#v", res)
+	}
+}
+
+func TestImpactOffset(t *testing.T) {
+	adj := map[string][]string{"A": {"B", "C"}}
+	first := Impact(adj, "A", 0, 1, 0)
+	if !first.Truncated || len(first.Nodes) != 1 || first.Nodes[0].Name != "B" {
+		t.Fatalf("unexpected first page: %#v", first)
+	}
+	second := Impact(adj, "A", 0, 1, 1)
+	if second.Truncated || len(second.Nodes) != 1 || second.Nodes[0].Name != "C" {
+		t.Fatalf("unexpected second page: %#v", second)
+	}
+}
+
+func TestCursorRoundtripAndStale(t *testing.T) {
+	c := EncodeCursor(7, 123)
+	got, err := DecodeCursor(c)
+	if err != nil || got.Version != 7 || got.Offset != 123 {
+		t.Fatalf("roundtrip failed: %#v %v", got, err)
+	}
+	if _, err := CheckCursor(c, 7); err != nil {
+		t.Fatalf("same version must pass: %v", err)
+	}
+	if _, err := CheckCursor(c, 8); err == nil {
+		t.Fatal("stale cursor must fail")
+	}
+	if _, err := DecodeCursor("not-base64!!"); err == nil {
+		t.Fatal("invalid cursor must fail")
 	}
 }
 

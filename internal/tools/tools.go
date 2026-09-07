@@ -202,7 +202,8 @@ type searchRepoInput struct {
 	RepoID string `json:"repo_id" jsonschema:"repository index identifier"`
 	Mode   string `json:"mode" jsonschema:"usages|complexity"`
 	Name   string `json:"name,omitempty" jsonschema:"symbol name; required for usages"`
-	Limit  int    `json:"limit,omitempty" jsonschema:"optional max results"`
+	Limit  int    `json:"limit,omitempty" jsonschema:"optional max results per page"`
+	Cursor string `json:"cursor,omitempty" jsonschema:"optional; next_cursor from a previous page"`
 }
 type repoOutput struct {
 	Timed
@@ -248,6 +249,8 @@ type searchRepoOutput struct {
 	Mode       string                    `json:"mode"`
 	Matches    []engine.UsageMatch       `json:"matches,omitempty"`
 	Complexity []engine.RankedComplexity `json:"complexity,omitempty"`
+	NextCursor string                    `json:"next_cursor,omitempty"`
+	Truncated  bool                      `json:"truncated,omitempty"`
 }
 
 type impactInput struct {
@@ -256,7 +259,8 @@ type impactInput struct {
 	Target    string `json:"target" jsonschema:"symbol or file name in the graph"`
 	Direction string `json:"direction,omitempty" jsonschema:"reverse (default) or forward"`
 	Depth     int    `json:"depth,omitempty" jsonschema:"0 = transitive"`
-	Limit     int    `json:"limit,omitempty" jsonschema:"optional max nodes"`
+	Limit     int    `json:"limit,omitempty" jsonschema:"optional max nodes per page"`
+	Cursor    string `json:"cursor,omitempty" jsonschema:"optional; next_cursor from a previous page"`
 }
 type impactOutput struct {
 	Timed
@@ -265,7 +269,7 @@ type impactOutput struct {
 
 func handleRepoImpact(_ context.Context, svcs *service.Services, in impactInput) (*impactOutput, error) {
 	reverse := in.Direction != "forward"
-	res, err := svcs.Repo.Impact(in.RepoID, in.Graph, in.Target, reverse, in.Depth, in.Limit)
+	res, err := svcs.Repo.Impact(in.RepoID, in.Graph, in.Target, reverse, in.Depth, in.Limit, in.Cursor)
 	if err != nil {
 		return nil, err
 	}
@@ -308,14 +312,11 @@ func handleSearchRepo(_ context.Context, svcs *service.Services, in searchRepoIn
 		if in.Name == "" {
 			return nil, fmt.Errorf("name is required for usages")
 		}
-		matches, err := svcs.Repo.Usages(in.RepoID, in.Name)
+		page, err := svcs.Repo.UsagePage(in.RepoID, in.Name, in.Cursor, in.Limit)
 		if err != nil {
 			return nil, err
 		}
-		if in.Limit > 0 && len(matches) > in.Limit {
-			matches = matches[:in.Limit]
-		}
-		return &searchRepoOutput{Mode: in.Mode, Matches: matches}, nil
+		return &searchRepoOutput{Mode: in.Mode, Matches: page.Matches, NextCursor: page.NextCursor, Truncated: page.Truncated}, nil
 	case "complexity":
 		entries, err := svcs.Repo.Complexity(in.RepoID, in.Limit)
 		if err != nil {
@@ -492,9 +493,10 @@ type findUsagesInput struct {
 	Path        string   `json:"path,omitempty" jsonschema:"optional; directory to scan"`
 	RepoID      string   `json:"repo_id,omitempty" jsonschema:"optional; query an indexed repository"`
 	Languages   []string `json:"languages,omitempty" jsonschema:"optional language filter"`
-	Limit       int      `json:"limit,omitempty" jsonschema:"optional max results"`
+	Limit       int      `json:"limit,omitempty" jsonschema:"optional max results per page"`
 	GroupByFile *bool    `json:"group_by_file,omitempty" jsonschema:"optional; default true"`
 	Kinds       []string `json:"kinds,omitempty" jsonschema:"optional occurrence kinds"`
+	Cursor      string   `json:"cursor,omitempty" jsonschema:"optional; next_cursor from a previous page"`
 }
 type findUsagesOutput struct {
 	Timed
@@ -522,12 +524,20 @@ func handleFindUsages(ctx context.Context, svcs *service.Services, in findUsages
 		if in.GroupByFile != nil {
 			group = *in.GroupByFile
 		}
-		res, err := svcs.Repo.FindUsages(in.RepoID, in.Name, service.FindQuery{
-			Mode: service.FindOccurrences, Name: in.Name, Dir: in.Path,
-			Limit: in.Limit, GroupByFile: group, Kinds: in.Kinds,
-		})
+		page, err := svcs.Repo.UsagePage(in.RepoID, in.Name, in.Cursor, in.Limit)
 		if err != nil {
 			return nil, err
+		}
+		res := &service.FindResult{
+			Language:   "indexed",
+			Mode:       in.Mode,
+			Matches:    page.Matches,
+			Kinds:      in.Kinds,
+			NextCursor: page.NextCursor,
+			Truncated:  page.Truncated,
+		}
+		if group {
+			res.Files = service.GroupUsageByFile(page.Matches)
 		}
 		return &findUsagesOutput{FindResult: *res}, nil
 	}
