@@ -32,6 +32,7 @@ type FindQuery struct {
 type FindResult struct {
 	Language string                         `json:"language"`
 	Mode     string                         `json:"mode"`
+	Source   string                         `json:"source,omitempty"` // "indexed_heuristic" for repo unused
 	Kinds    []string                       `json:"kinds,omitempty"`
 	Matches  []engine.UsageMatch            `json:"matches,omitempty"`
 	Files    map[string][]engine.UsageMatch `json:"files,omitempty"`

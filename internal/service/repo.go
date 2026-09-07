@@ -367,6 +367,19 @@ func (s *RepoService) Usages(id, name string) ([]engine.UsageMatch, error) {
 	return matches, nil
 }
 
+// Unused returns symbols declared but never referenced, from AST occurrences
+// in the index. The result is heuristic (no scope resolution).
+func (s *RepoService) Unused(id string, limit int) (*engine.SearchResult, error) {
+	matches, ok := s.store.Unused(id)
+	if !ok {
+		return nil, fmt.Errorf("unknown repository %q", id)
+	}
+	if limit > 0 && len(matches) > limit {
+		matches = matches[:limit]
+	}
+	return &engine.SearchResult{Total: len(matches), Matches: matches}, nil
+}
+
 func (s *RepoService) Complexity(id string, limit int) ([]engine.RankedComplexity, error) {
 	entries, ok := s.store.Complexity(id, limit)
 	if !ok {

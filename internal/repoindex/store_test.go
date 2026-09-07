@@ -79,6 +79,36 @@ func TestMemoryStoreApplyDelta(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreUnused(t *testing.T) {
+	store := NewMemory(0)
+	info := store.Create("/repo")
+	facts := fileFacts("/repo/a.go", "go")
+	facts.Facts.Symbols = map[string][]engine.Symbol{
+		"functions": {
+			{Name: "Dead", Text: "func Dead()"},
+			{Name: "Live", Text: "func Live()"},
+			{Name: "CommentOnly", Text: "func CommentOnly()"},
+		},
+	}
+	facts.Facts.Usages = []engine.UsageMatch{
+		{File: "/repo/a.go", Name: "Dead", Line: 1, Kind: "definition"},
+		{File: "/repo/a.go", Name: "Live", Line: 2, Kind: "definition"},
+		{File: "/repo/a.go", Name: "Live", Line: 3, Kind: "reference"},
+		{File: "/repo/a.go", Name: "CommentOnly", Line: 4, Kind: "definition"},
+	}
+	if _, err := store.Replace(info.ID, map[string]IndexedFile{"/repo/a.go": facts}, nil); err != nil {
+		t.Fatal(err)
+	}
+	unused, ok := store.Unused(info.ID)
+	if !ok || len(unused) != 2 {
+		t.Fatalf("want 2 unused symbols, got %#v", unused)
+	}
+	names := map[string]bool{unused[0].Name: true, unused[1].Name: true}
+	if !names["Dead"] || !names["CommentOnly"] || names["Live"] {
+		t.Fatalf("unexpected unused set: %#v", unused)
+	}
+}
+
 func TestParseMemoryLimit(t *testing.T) {
 	for _, bad := range []string{"2048", "2gb", "2048mbx", "-1mb", ""} {
 		if _, err := ParseMemoryLimit(bad); err == nil {

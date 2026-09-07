@@ -59,6 +59,7 @@ type Store interface {
 	Symbols(id string) (map[string]map[string][]engine.Symbol, bool)
 	Usages(id, name string) ([]engine.UsageMatch, bool)
 	Complexity(id string, limit int) ([]engine.RankedComplexity, bool)
+	Unused(id string) ([]engine.SearchMatch, bool)
 	Calls(id string) (CallGraph, bool)
 	Imports(id string) (ImportGraph, bool)
 }
@@ -307,6 +308,60 @@ func (s *MemoryStore) Calls(id string) (CallGraph, bool) {
 		return CallGraph{}, false
 	}
 	return r.calls, true
+}
+
+// Unused returns declared symbols whose name occurs exactly once across the
+// AST occurrences of the whole index (that occurrence is the declaration
+// itself). Imports are skipped; comments and strings do not count because
+// occurrences come from the identifier query, not from raw text. The result
+// is heuristic: scope and overloads are not resolved.
+func (s *MemoryStore) Unused(id string) ([]engine.SearchMatch, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	r, ok := s.repos[id]
+	if !ok {
+		return nil, false
+	}
+	seen := map[string]bool{}
+	matches := make([]engine.SearchMatch, 0)
+	paths := make([]string, 0, len(r.files))
+	for p := range r.files {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	for _, p := range paths {
+		facts := r.files[p].Facts
+		for kind, syms := range facts.Symbols {
+			if kind == "imports" {
+				continue
+			}
+			for _, sym := range syms {
+				name := strings.TrimSpace(sym.Name)
+				if name == "" || seen[name] {
+					continue
+				}
+				seen[name] = true
+				total := 0
+				for _, refs := range r.usages[name] {
+					total += len(refs)
+				}
+				if total != 1 {
+					continue
+				}
+				matches = append(matches, engine.SearchMatch{
+					File: p, Kind: kind, Name: sym.Name,
+					Line: sym.Start.Row + 1, Col: sym.Start.Col, Text: sym.Text,
+				})
+			}
+		}
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].File != matches[j].File {
+			return matches[i].File < matches[j].File
+		}
+		return matches[i].Name < matches[j].Name
+	})
+	return matches, true
 }
 
 func (s *MemoryStore) Imports(id string) (ImportGraph, bool) {

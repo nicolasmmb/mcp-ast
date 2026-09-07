@@ -276,6 +276,35 @@ func TestRepoServiceStaleFileReindexed(t *testing.T) {
 	}
 }
 
+func TestRepoServiceUnused(t *testing.T) {
+	svcs := testRepoServices(t, 1<<30)
+	dir, _, _ := writeFixture(t)
+	info, err := svcs.Repo.Index(context.Background(), dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitReady(t, svcs, info.ID)
+
+	res, err := svcs.Repo.Unused(info.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, m := range res.Matches {
+		if m.Name == "UnusedFn" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("UnusedFn should be unused, got %#v", res.Matches)
+	}
+	for _, m := range res.Matches {
+		if m.Name == "Helper" {
+			t.Fatalf("Helper is used and must not be flagged: %#v", m)
+		}
+	}
+}
+
 func jsonOut(v any) string {
 	data, err := json.Marshal(v)
 	if err != nil {

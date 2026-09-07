@@ -503,8 +503,17 @@ type findUsagesOutput struct {
 
 func handleFindUsages(ctx context.Context, svcs *service.Services, in findUsagesInput) (*findUsagesOutput, error) {
 	if in.RepoID != "" {
+		if in.Mode == string(service.FindUnused) {
+			res, err := svcs.Repo.Unused(in.RepoID, in.Limit)
+			if err != nil {
+				return nil, err
+			}
+			return &findUsagesOutput{FindResult: service.FindResult{
+				Language: "indexed", Mode: in.Mode, Source: "indexed_heuristic", Symbols: res.Matches,
+			}}, nil
+		}
 		if in.Mode != string(service.FindOccurrences) {
-			return nil, fmt.Errorf("repo_id only supports mode=occurrences")
+			return nil, fmt.Errorf("repo_id only supports mode=occurrences and mode=unused")
 		}
 		if in.Name == "" {
 			return nil, fmt.Errorf("name is required with repo_id")
