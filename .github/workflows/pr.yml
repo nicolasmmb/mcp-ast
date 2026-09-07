@@ -37,6 +37,9 @@ jobs:
             runner: windows-latest
     env:
       VERSION: pr-${{ github.event.pull_request.number }}
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+      CGO_ENABLED: 1
     steps:
       - uses: actions/checkout@v4
 
@@ -46,10 +49,6 @@ jobs:
 
       - name: Build PR binary
         shell: bash
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 1
         run: |
           set -euo pipefail
           ext=""
