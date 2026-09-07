@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -31,7 +32,11 @@ func moduleRoot(t *testing.T) string {
 
 func buildServer(t *testing.T) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "ast-mcp")
+	name := "ast-mcp"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	bin := filepath.Join(t.TempDir(), name)
 	cmd := exec.Command("go", "build", "-o", bin, "./cmd/ast-mcp")
 	cmd.Dir = moduleRoot(t)
 	out, err := cmd.CombinedOutput()
