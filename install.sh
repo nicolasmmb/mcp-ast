@@ -81,8 +81,8 @@ if [ -n "${AST_MCP_PR:-}" ]; then
   log "PR build resolved: $version (run $run_id, artifact $artifact_id)."
 
   log "Step 4/7: Downloading artifact (zip)."
-  if [ -n "${GH_TOKEN:-$GITHUB_TOKEN}" ]; then
-    curl -fsSL -H "Authorization: Bearer ${GH_TOKEN:-$GITHUB_TOKEN}" \
+  if [ -n "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]; then
+    curl -fsSL -H "Authorization: Bearer ${GH_TOKEN:-${GITHUB_TOKEN:-}}" \
       -H "Accept: application/vnd.github+json" \
       "$api_url/actions/artifacts/$artifact_id/zip" -o "$tmp_dir/artifact.zip"
   else
