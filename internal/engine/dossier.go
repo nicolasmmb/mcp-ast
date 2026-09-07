@@ -10,6 +10,7 @@ type FileReport struct {
 	Metrics    *Metrics          `json:"metrics"`
 	Complexity []ComplexityEntry `json:"complexity"`
 	CallGraph  []CallEntry       `json:"call_graph"`
+	Source     string            `json:"source,omitempty"` // "indexed" or "ast_fallback"
 }
 
 // Dossier parses path once and computes size/complexity metrics, per-function

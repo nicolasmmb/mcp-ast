@@ -288,6 +288,76 @@ func (s *RepoService) graphData(id, graph string, reverse bool) (map[string][]st
 	}
 }
 
+// freshFacts returns the indexed facts for path, reindexing the file when its
+// digest no longer matches the stored one. A nil result with nil error means
+// the path is not part of the index (fallback to direct parse is safe).
+func (s *RepoService) freshFacts(id, path string) (*engine.FileIndex, error) {
+	meta, ok := s.store.Meta(id)
+	if !ok {
+		return nil, fmt.Errorf("unknown repository %q", id)
+	}
+	f, ok := meta[path]
+	if !ok {
+		return nil, nil
+	}
+	digest, err := fileDigest(path)
+	if err != nil {
+		return nil, nil
+	}
+	if digest == f.Digest {
+		return f.Facts, nil
+	}
+	indexed, ok := s.indexPath(path, meta)
+	if !ok {
+		return nil, nil
+	}
+	if _, err := s.store.Apply(id, repoindex.ChangeSet{Updated: map[string]repoindex.IndexedFile{path: indexed}}); err != nil {
+		return nil, err
+	}
+	return indexed.Facts, nil
+}
+
+// Outline serves a file outline from indexed symbols when full text is not
+// needed; otherwise it re-parses that single file (AST fallback).
+func (s *RepoService) Outline(id, path string, includeText bool) (*OutlineResult, error) {
+	facts, err := s.freshFacts(id, path)
+	if err != nil {
+		return nil, err
+	}
+	if facts != nil && !includeText && facts.Capabilities.Has(engine.IndexedOutline) {
+		return &OutlineResult{Language: facts.Language, Path: path, Outline: engine.OutlineFromSymbols(facts.Symbols), Source: "indexed"}, nil
+	}
+	l, err := s.eng.Resolve("", path)
+	if err != nil {
+		return nil, err
+	}
+	nodes, err := s.eng.Outline(l, path, includeText)
+	if err != nil {
+		return nil, err
+	}
+	return &OutlineResult{Language: l.Name(), Path: path, Outline: nodes, Source: "ast_fallback"}, nil
+}
+
+// Analyze serves the file dossier. Metrics and call graph are not indexed
+// (ponytail: keep the index lean; add indexed metrics if analyze becomes a
+// hot path), so the dossier always re-parses that single file, after
+// reindexing it when stale.
+func (s *RepoService) Analyze(id, path string) (*engine.FileReport, error) {
+	if _, err := s.freshFacts(id, path); err != nil {
+		return nil, err
+	}
+	l, err := s.eng.Resolve("", path)
+	if err != nil {
+		return nil, err
+	}
+	report, err := s.eng.Dossier(l, path)
+	if err != nil {
+		return nil, err
+	}
+	report.Source = "ast_fallback"
+	return report, nil
+}
+
 // Usages queries indexed usages for a symbol.
 func (s *RepoService) Usages(id, name string) ([]engine.UsageMatch, error) {
 	matches, ok := s.store.Usages(id, name)

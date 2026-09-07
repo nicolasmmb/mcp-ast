@@ -7,12 +7,28 @@ import (
 	"mcp-ast/internal/lang"
 )
 
+// IndexedCapabilities marks which facts a FileIndex actually contains. Queries
+// for absent facts trigger an AST fallback (single-file reparse).
+type IndexedCapabilities uint16
+
+const (
+	IndexedSymbols IndexedCapabilities = 1 << iota
+	IndexedImports
+	IndexedCalls
+	IndexedUsages
+	IndexedComplexity
+	IndexedOutline
+)
+
+func (c IndexedCapabilities) Has(f IndexedCapabilities) bool { return c&f != 0 }
+
 // FileIndex contains indexed facts extracted from one source file.
 type FileIndex struct {
-	Language   string              `json:"language"`
-	Symbols    map[string][]Symbol `json:"symbols"`
-	Usages     []UsageMatch        `json:"usages"`
-	Complexity []ComplexityEntry   `json:"complexity"`
+	Language     string              `json:"language"`
+	Symbols      map[string][]Symbol `json:"symbols"`
+	Usages       []UsageMatch        `json:"usages"`
+	Complexity   []ComplexityEntry   `json:"complexity"`
+	Capabilities IndexedCapabilities `json:"-"`
 }
 
 // IndexFile parses path once and returns its symbols, identifier usages, and
@@ -36,7 +52,13 @@ func (e *Engine) IndexFile(l lang.Language, path string) (*FileIndex, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &FileIndex{Language: l.Name(), Symbols: symbols, Usages: usages, Complexity: complexity}, nil
+	return &FileIndex{
+		Language:     l.Name(),
+		Symbols:      symbols,
+		Usages:       usages,
+		Complexity:   complexity,
+		Capabilities: IndexedSymbols | IndexedImports | IndexedUsages | IndexedComplexity | IndexedOutline,
+	}, nil
 }
 
 // ListFiles returns every recognized file path under dir (same walk rules as

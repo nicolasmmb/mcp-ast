@@ -42,6 +42,7 @@ type OutlineResult struct {
 	Language string                `json:"language"`
 	Path     string                `json:"path"`
 	Outline  []*engine.OutlineNode `json:"outline"`
+	Source   string                `json:"source,omitempty"` // "indexed" or "ast_fallback"
 }
 
 // Outline returns a hierarchical symbol tree for path.

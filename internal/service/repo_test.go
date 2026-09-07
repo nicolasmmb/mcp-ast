@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -206,6 +207,81 @@ func TestRepoServiceGraphs(t *testing.T) {
 	if len(imports.Nodes) == 0 {
 		t.Fatal("fmt import should be listed")
 	}
+}
+
+func TestRepoServiceOutlineIndexedAndFallback(t *testing.T) {
+	svcs := testRepoServices(t, 1<<30)
+	dir, mainPath, _ := writeFixture(t)
+	info, err := svcs.Repo.Index(context.Background(), dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitReady(t, svcs, info.ID)
+
+	outline, err := svcs.Repo.Outline(info.ID, mainPath, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outline.Source != "indexed" || len(outline.Outline) == 0 {
+		t.Fatalf("want indexed outline, got %#v", outline)
+	}
+	if !strings.Contains(jsonOut(outline), "Main") {
+		t.Fatalf("outline should contain Main: %s", jsonOut(outline))
+	}
+
+	full, err := svcs.Repo.Outline(info.ID, mainPath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if full.Source != "ast_fallback" || len(full.Outline) == 0 {
+		t.Fatalf("want ast_fallback outline with text, got %#v", full)
+	}
+
+	report, err := svcs.Repo.Analyze(info.ID, mainPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Source != "ast_fallback" || report.Metrics == nil {
+		t.Fatalf("want ast_fallback dossier with metrics, got %#v", report)
+	}
+}
+
+func TestRepoServiceStaleFileReindexed(t *testing.T) {
+	svcs := testRepoServices(t, 1<<30)
+	dir, mainPath, _ := writeFixture(t)
+	info, err := svcs.Repo.Index(context.Background(), dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitReady(t, svcs, info.ID)
+	before := info.Version
+
+	newMain := strings.Replace(fixtureMain, "func Main()", "func Main2()", 1)
+	if err := os.WriteFile(mainPath, []byte(newMain), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outline, err := svcs.Repo.Outline(info.ID, mainPath, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(jsonOut(outline), "Main2") {
+		t.Fatalf("stale file should be reindexed before serving outline: %s", jsonOut(outline))
+	}
+	info, err = svcs.Repo.Status(info.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Version <= before {
+		t.Fatalf("stale file reindex should bump version: before %d, after %d", before, info.Version)
+	}
+}
+
+func jsonOut(v any) string {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func TestRepoServiceUnknownID(t *testing.T) {

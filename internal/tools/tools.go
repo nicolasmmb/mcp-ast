@@ -433,14 +433,25 @@ func handleScanSymbols(ctx context.Context, svcs *service.Services, in scanSymbo
 
 type analyzeInput struct {
 	Language string `json:"language,omitempty" jsonschema:"optional; language name"`
-	Path     string `json:"path" jsonschema:"path to the source file"`
+	Path     string `json:"path,omitempty" jsonschema:"optional; path to the source file"`
+	RepoID   string `json:"repo_id,omitempty" jsonschema:"optional; query an indexed repository"`
 }
 type analyzeOutput struct {
 	Timed
 	service.FileReport
 }
 
-func handleAnalyzeFile(_ context.Context, svcs *service.Services, in analyzeInput) (*analyzeOutput, error) {
+func handleAnalyzeFile(ctx context.Context, svcs *service.Services, in analyzeInput) (*analyzeOutput, error) {
+	if in.RepoID != "" {
+		if in.Path == "" {
+			return nil, fmt.Errorf("path is required with repo_id")
+		}
+		res, err := svcs.Repo.Analyze(in.RepoID, in.Path)
+		if err != nil {
+			return nil, err
+		}
+		return &analyzeOutput{FileReport: *res}, nil
+	}
 	res, err := svcs.File.Dossier(in.Language, in.Path)
 	if err != nil {
 		return nil, err
@@ -563,7 +574,8 @@ func handleRankComplexity(ctx context.Context, svcs *service.Services, in rankCo
 
 type outlineInput struct {
 	Language    string `json:"language,omitempty" jsonschema:"optional; language name"`
-	Path        string `json:"path" jsonschema:"path to the source file"`
+	Path        string `json:"path,omitempty" jsonschema:"optional; path to the source file"`
+	RepoID      string `json:"repo_id,omitempty" jsonschema:"optional; query an indexed repository"`
 	IncludeText bool   `json:"include_text,omitempty" jsonschema:"optional full text"`
 }
 type outlineOutput struct {
@@ -571,7 +583,17 @@ type outlineOutput struct {
 	service.OutlineResult
 }
 
-func handleOutlineFile(_ context.Context, svcs *service.Services, in outlineInput) (*outlineOutput, error) {
+func handleOutlineFile(ctx context.Context, svcs *service.Services, in outlineInput) (*outlineOutput, error) {
+	if in.RepoID != "" {
+		if in.Path == "" {
+			return nil, fmt.Errorf("path is required with repo_id")
+		}
+		res, err := svcs.Repo.Outline(in.RepoID, in.Path, in.IncludeText)
+		if err != nil {
+			return nil, err
+		}
+		return &outlineOutput{OutlineResult: *res}, nil
+	}
 	res, err := svcs.File.Outline(in.Language, in.Path, in.IncludeText)
 	if err != nil {
 		return nil, err
