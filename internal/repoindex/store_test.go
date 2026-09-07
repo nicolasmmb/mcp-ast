@@ -2,6 +2,7 @@ package repoindex
 
 import (
 	"testing"
+	"unsafe"
 
 	"mcp-ast/internal/engine"
 )
@@ -153,6 +154,46 @@ func TestCanonicalResolution(t *testing.T) {
 		if e.Resolution != "exact" {
 			t.Fatalf("Save should resolve exact after delete, got %#v", e)
 		}
+	}
+}
+
+func TestCompactRepresentation(t *testing.T) {
+	// The internal posting entry must be far smaller than the public
+	// UsageMatch: names, callers and canonicals are interned ids, not
+	// per-occurrence strings.
+	if sz := unsafe.Sizeof(UsageRef{}); sz >= unsafe.Sizeof(engine.UsageMatch{})*7/10 {
+		t.Fatalf("UsageRef too large: %d vs UsageMatch %d", sz, unsafe.Sizeof(engine.UsageMatch{}))
+	}
+}
+
+func TestCompactEquivalence(t *testing.T) {
+	store := NewMemory(0)
+	info := store.Create("/repo")
+	facts := fileFacts("/repo/a.go", "go")
+	facts.Facts.Usages = append(facts.Facts.Usages,
+		engine.UsageMatch{File: "/repo/a.go", Name: "Run", Line: 3, Col: 4, Text: "run()", Kind: "call-site", Caller: "Main"},
+		engine.UsageMatch{File: "/repo/a.go", Name: "Run", Line: 7, Col: 0, Text: "Run", Kind: "reference"},
+	)
+	if _, err := store.Replace(info.ID, map[string]IndexedFile{"/repo/a.go": facts}, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := store.Usages(info.ID, "Run")
+	if !ok || len(got) != 4 {
+		t.Fatalf("want 4 usages, got %#v", got)
+	}
+	for _, u := range got {
+		if u.Name != "Run" || u.File != "/repo/a.go" {
+			t.Fatalf("identity lost in compacted postings: %#v", u)
+		}
+	}
+	var callSite *engine.UsageMatch
+	for i := range got {
+		if got[i].Kind == "call-site" && got[i].Line == 3 {
+			callSite = &got[i]
+		}
+	}
+	if callSite == nil || callSite.Caller != "Main" || callSite.Line != 3 || callSite.Col != 4 {
+		t.Fatalf("call-site fields lost: %#v", callSite)
 	}
 }
 

@@ -64,6 +64,56 @@ type Store interface {
 	Imports(id string) (ImportGraph, bool)
 }
 
+// FileID and NameID intern paths and names so that usage postings store only
+// 32-bit ids instead of repeated strings.
+type FileID uint32
+type NameID uint32
+
+const (
+	kindDefinition uint8 = iota
+	kindReference
+	kindCallSite
+	kindImport
+)
+
+func kindOf(s string) uint8 {
+	switch s {
+	case "definition":
+		return kindDefinition
+	case "call-site":
+		return kindCallSite
+	case "import":
+		return kindImport
+	default:
+		return kindReference
+	}
+}
+
+func kindString(k uint8) string {
+	switch k {
+	case kindDefinition:
+		return "definition"
+	case kindCallSite:
+		return "call-site"
+	case kindImport:
+		return "import"
+	default:
+		return "reference"
+	}
+}
+
+// UsageRef is the compact internal posting entry. File and Name are the map
+// keys; Caller and Canonical are interned NameIDs (0 = absent). Text is kept
+// verbatim: it is per-occurrence data, not repeated across postings.
+type UsageRef struct {
+	Row       uint32
+	Col       uint32
+	Kind      uint8
+	Caller    NameID
+	Canonical NameID
+	Text      string
+}
+
 type MemoryStore struct {
 	mu     sync.RWMutex
 	limit  int64
@@ -73,12 +123,16 @@ type MemoryStore struct {
 
 type repo struct {
 	info        Info
-	files       map[string]*IndexedFile // path -> facts+meta
-	usages      map[string]map[string][]engine.UsageMatch
-	fileUsages  map[string]map[string][]engine.UsageMatch // file -> name -> refs (for O(1) removal)
-	byCanonical map[string]map[string][]engine.UsageMatch
+	files       map[FileID]*IndexedFile // id -> facts+meta
+	fileIDs     map[string]FileID       // path -> id
+	paths       []string                // id -> path
+	usages      map[NameID]map[FileID][]UsageRef
+	fileUsages  map[FileID]map[NameID][]UsageRef // for O(1) removal
+	byCanonical map[NameID]map[FileID][]UsageRef
+	names       []string
+	nameIDs     map[string]NameID
 	complexity  []engine.RankedComplexity
-	fileMemory  map[string]int64
+	fileMemory  map[FileID]int64
 	calls       CallGraph
 	imports     ImportGraph
 	errors      map[string]string
@@ -90,12 +144,52 @@ func NewMemory(limit int64) *MemoryStore {
 
 func newRepo(root string, limit int64) *repo {
 	return &repo{
-		files:      make(map[string]*IndexedFile),
-		usages:     make(map[string]map[string][]engine.UsageMatch),
-		fileUsages: make(map[string]map[string][]engine.UsageMatch),
-		fileMemory: make(map[string]int64),
-		errors:     make(map[string]string),
+		files:       make(map[FileID]*IndexedFile),
+		fileIDs:     make(map[string]FileID),
+		usages:      make(map[NameID]map[FileID][]UsageRef),
+		fileUsages:  make(map[FileID]map[NameID][]UsageRef),
+		byCanonical: make(map[NameID]map[FileID][]UsageRef),
+		nameIDs:     make(map[string]NameID),
+		fileMemory:  make(map[FileID]int64),
+		errors:      make(map[string]string),
 	}
+}
+
+func (r *repo) internFile(path string) FileID {
+	if id, ok := r.fileIDs[path]; ok {
+		return id
+	}
+	id := FileID(len(r.paths) + 1)
+	r.fileIDs[path] = id
+	r.paths = append(r.paths, path)
+	return id
+}
+
+func (r *repo) internName(name string) NameID {
+	if name == "" {
+		return 0
+	}
+	if id, ok := r.nameIDs[name]; ok {
+		return id
+	}
+	id := NameID(len(r.names) + 1)
+	r.nameIDs[name] = id
+	r.names = append(r.names, name)
+	return id
+}
+
+func (r *repo) filePath(id FileID) string {
+	if id == 0 || int(id) > len(r.paths) {
+		return ""
+	}
+	return r.paths[id-1]
+}
+
+func (r *repo) nameOf(id NameID) string {
+	if id == 0 || int(id) > len(r.names) {
+		return ""
+	}
+	return r.names[id-1]
 }
 
 func (s *MemoryStore) Create(root string) Info {
@@ -128,22 +222,34 @@ func (s *MemoryStore) Replace(id string, files map[string]IndexedFile, errs map[
 	if !ok {
 		return Info{}, ErrNotFound
 	}
-	r.files = make(map[string]*IndexedFile, len(files))
-	r.usages = make(map[string]map[string][]engine.UsageMatch)
-	r.fileUsages = make(map[string]map[string][]engine.UsageMatch)
-	r.fileMemory = make(map[string]int64)
+	r.files = make(map[FileID]*IndexedFile, len(files))
+	r.fileIDs = make(map[string]FileID, len(files))
+	r.paths = r.paths[:0]
+	r.usages = make(map[NameID]map[FileID][]UsageRef)
+	r.fileUsages = make(map[FileID]map[NameID][]UsageRef)
+	r.byCanonical = make(map[NameID]map[FileID][]UsageRef)
+	r.names = r.names[:0]
+	r.nameIDs = make(map[string]NameID)
+	r.fileMemory = make(map[FileID]int64)
 	r.complexity = nil
 	r.errors = map[string]string{}
 	memory := int64(0)
-	for p, f := range files {
+	paths := make([]string, 0, len(files))
+	for p := range files {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	for _, p := range paths {
+		f := files[p]
 		cp := f
-		r.files[p] = &cp
-		memory += r.insert(p, &cp)
+		fid := r.internFile(p)
+		r.files[fid] = &cp
+		memory += r.insert(fid, &cp)
 	}
 	r.errors = errs
 	r.enrich()
-	r.calls = buildCallGraph(r.files)
-	r.imports = buildImportGraph(r.files)
+	r.calls = buildCallGraph(r.filesByPath())
+	r.imports = buildImportGraph(r.filesByPath())
 	r.info.MemoryBytes = memory
 	r.info.UpdatedAt = time.Now().UTC()
 	if s.limit > 0 && memory > s.limit {
@@ -168,19 +274,25 @@ func (s *MemoryStore) Apply(id string, changes ChangeSet) (Info, error) {
 		return Info{}, ErrNotFound
 	}
 	for _, p := range changes.Deleted {
-		r.remove(p)
+		r.remove(r.fileIDs[p])
 	}
 	for p, f := range changes.Updated {
-		r.remove(p)
-		r.insertNew(p, &f)
+		r.remove(r.fileIDs[p])
+		fid := r.internFile(p)
+		cp := f
+		r.files[fid] = &cp
+		r.insert(fid, &cp)
 	}
 	for p, f := range changes.Added {
-		r.insertNew(p, &f)
+		fid := r.internFile(p)
+		cp := f
+		r.files[fid] = &cp
+		r.insert(fid, &cp)
 	}
 	sort.Slice(r.complexity, func(i, j int) bool { return cmpComplexity(r.complexity[i], r.complexity[j]) })
 	r.enrich()
-	r.calls = buildCallGraph(r.files)
-	r.imports = buildImportGraph(r.files)
+	r.calls = buildCallGraph(r.filesByPath())
+	r.imports = buildImportGraph(r.filesByPath())
 	info := r.info
 	info.MemoryBytes = s.estimateMemory(r)
 	info.UpdatedAt = time.Now().UTC()
@@ -195,6 +307,15 @@ func (s *MemoryStore) Apply(id string, changes ChangeSet) (Info, error) {
 	info.Version++
 	r.info = info
 	return info, nil
+}
+
+// filesByPath rebuilds the path-keyed view needed by the graph builders.
+func (r *repo) filesByPath() map[string]*IndexedFile {
+	out := make(map[string]*IndexedFile, len(r.files))
+	for id, f := range r.files {
+		out[r.filePath(id)] = f
+	}
+	return out
 }
 
 func cmpComplexity(a, b engine.RankedComplexity) bool {
@@ -227,8 +348,8 @@ func (s *MemoryStore) Meta(id string) (map[string]IndexedFile, bool) {
 		return nil, false
 	}
 	out := make(map[string]IndexedFile, len(r.files))
-	for p, f := range r.files {
-		out[p] = *f
+	for fid, f := range r.files {
+		out[r.filePath(fid)] = *f
 	}
 	return out, true
 }
@@ -251,8 +372,8 @@ func (s *MemoryStore) Files(id string) (map[string]*engine.FileIndex, bool) {
 		return nil, false
 	}
 	out := make(map[string]*engine.FileIndex, len(r.files))
-	for p, f := range r.files {
-		out[p] = f.Facts
+	for fid, f := range r.files {
+		out[r.filePath(fid)] = f.Facts
 	}
 	return out, true
 }
@@ -277,15 +398,27 @@ func (s *MemoryStore) Usages(id, name string) ([]engine.UsageMatch, bool) {
 		return nil, false
 	}
 	if strings.Contains(name, "|") {
-		return flattenUsages(r.byCanonical[name]), true
+		return r.flattenUsages(r.nameIDs[name], r.byCanonical[r.nameIDs[name]]), true
 	}
-	return flattenUsages(r.usages[name]), true
+	return r.flattenUsages(r.nameIDs[name], r.usages[r.nameIDs[name]]), true
 }
 
-func flattenUsages(byFile map[string][]engine.UsageMatch) []engine.UsageMatch {
+func (r *repo) flattenUsages(nameID NameID, byFile map[FileID][]UsageRef) []engine.UsageMatch {
 	out := make([]engine.UsageMatch, 0)
-	for _, refs := range byFile {
-		out = append(out, refs...)
+	for fid, refs := range byFile {
+		path := r.filePath(fid)
+		for _, ref := range refs {
+			out = append(out, engine.UsageMatch{
+				File:      path,
+				Name:      r.nameOf(nameID),
+				Canonical: r.nameOf(ref.Canonical),
+				Line:      int(ref.Row) + 1,
+				Col:       int(ref.Col),
+				Text:      ref.Text,
+				Kind:      kindString(ref.Kind),
+				Caller:    r.nameOf(ref.Caller),
+			})
+		}
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].File != out[j].File {
@@ -334,13 +467,14 @@ func (s *MemoryStore) Unused(id string) ([]engine.SearchMatch, bool) {
 	}
 	seen := map[string]bool{}
 	matches := make([]engine.SearchMatch, 0)
-	paths := make([]string, 0, len(r.files))
-	for p := range r.files {
-		paths = append(paths, p)
+	fids := make([]FileID, 0, len(r.files))
+	for fid := range r.files {
+		fids = append(fids, fid)
 	}
-	sort.Strings(paths)
-	for _, p := range paths {
-		facts := r.files[p].Facts
+	sort.Slice(fids, func(i, j int) bool { return r.filePath(fids[i]) < r.filePath(fids[j]) })
+	for _, fid := range fids {
+		p := r.filePath(fid)
+		facts := r.files[fid].Facts
 		for kind, syms := range facts.Symbols {
 			if kind == "imports" {
 				continue
@@ -352,7 +486,7 @@ func (s *MemoryStore) Unused(id string) ([]engine.SearchMatch, bool) {
 				}
 				seen[name] = true
 				total := 0
-				for _, refs := range r.usages[name] {
+				for _, refs := range r.usages[r.nameIDs[name]] {
 					total += len(refs)
 				}
 				if total != 1 {
@@ -384,22 +518,21 @@ func (s *MemoryStore) Imports(id string) (ImportGraph, bool) {
 	return r.imports, true
 }
 
-// remove deletes every posting contributed by path.
-func (r *repo) remove(path string) {
-	f, ok := r.files[path]
-	if !ok {
+// remove deletes every posting contributed by fid.
+func (r *repo) remove(fid FileID) {
+	if fid == 0 {
 		return
 	}
-	for name := range r.fileUsages[path] {
-		delete(r.usages[name], path)
-		if len(r.usages[name]) == 0 {
-			delete(r.usages, name)
+	for nameID := range r.fileUsages[fid] {
+		delete(r.usages[nameID], fid)
+		if len(r.usages[nameID]) == 0 {
+			delete(r.usages, nameID)
 		}
 	}
-	_ = f
-	delete(r.fileUsages, path)
-	delete(r.files, path)
-	delete(r.fileMemory, path)
+	delete(r.fileUsages, fid)
+	delete(r.files, fid)
+	delete(r.fileMemory, fid)
+	path := r.filePath(fid)
 	out := r.complexity[:0]
 	for _, e := range r.complexity {
 		if e.File != path {
@@ -410,35 +543,36 @@ func (r *repo) remove(path string) {
 }
 
 // insert adds postings for a fresh file and returns its memory estimate.
-func (r *repo) insert(path string, f *IndexedFile) int64 {
+func (r *repo) insert(fid FileID, f *IndexedFile) int64 {
 	facts := f.Facts
+	path := r.filePath(fid)
 	memory := estimateFile(path, facts)
 	for _, u := range facts.Usages {
-		byFile := r.usages[u.Name]
+		nameID := r.internName(u.Name)
+		byFile := r.usages[nameID]
 		if byFile == nil {
-			byFile = make(map[string][]engine.UsageMatch)
-			r.usages[u.Name] = byFile
+			byFile = make(map[FileID][]UsageRef)
+			r.usages[nameID] = byFile
 		}
-		byFile[path] = append(byFile[path], u)
-		fileMap := r.fileUsages[path]
+		byFile[fid] = append(byFile[fid], UsageRef{
+			Row:    uint32(u.Line - 1),
+			Col:    uint32(u.Col),
+			Kind:   kindOf(u.Kind),
+			Caller: r.internName(u.Caller),
+			Text:   u.Text,
+		})
+		fileMap := r.fileUsages[fid]
 		if fileMap == nil {
-			fileMap = make(map[string][]engine.UsageMatch)
-			r.fileUsages[path] = fileMap
+			fileMap = make(map[NameID][]UsageRef)
+			r.fileUsages[fid] = fileMap
 		}
-		fileMap[u.Name] = append(fileMap[u.Name], u)
+		fileMap[nameID] = append(fileMap[nameID], byFile[fid][len(byFile[fid])-1])
 	}
 	for _, c := range facts.Complexity {
 		r.complexity = append(r.complexity, engine.RankedComplexity{File: path, ComplexityEntry: c})
 	}
-	r.fileMemory[path] = memory
+	r.fileMemory[fid] = memory
 	return memory
-}
-
-// insertNew inserts a file that must not exist yet.
-func (r *repo) insertNew(path string, f *IndexedFile) {
-	cp := *f
-	r.files[path] = &cp
-	_ = r.insert(path, &cp)
 }
 
 // enrich stamps canonical identities on usages. A usage gets the canonical
@@ -448,7 +582,8 @@ func (r *repo) insertNew(path string, f *IndexedFile) {
 func (r *repo) enrich() {
 	declCount := map[string]int{}
 	declCanonical := map[string]string{}
-	for p, f := range r.files {
+	for fid, f := range r.files {
+		path := r.filePath(fid)
 		for kind, syms := range f.Facts.Symbols {
 			if kind == "imports" {
 				continue
@@ -460,30 +595,32 @@ func (r *repo) enrich() {
 				}
 				declCount[name]++
 				if _, ok := declCanonical[name]; !ok {
-					declCanonical[name] = f.Facts.Language + "|" + p + "|" + kind + "|" + name
+					declCanonical[name] = f.Facts.Language + "|" + path + "|" + kind + "|" + name
 				}
 			}
 		}
 	}
-	r.byCanonical = make(map[string]map[string][]engine.UsageMatch)
-	for name, byFile := range r.usages {
+	r.byCanonical = make(map[NameID]map[FileID][]UsageRef)
+	for nameID, byFile := range r.usages {
+		name := r.nameOf(nameID)
 		canonical := ""
 		if declCount[name] == 1 {
 			canonical = declCanonical[name]
 		}
-		for file, refs := range byFile {
+		canonicalID := r.internName(canonical)
+		for fid, refs := range byFile {
 			for i := range refs {
-				refs[i].Canonical = canonical
+				refs[i].Canonical = canonicalID
 			}
 			if canonical == "" {
 				continue
 			}
-			c := r.byCanonical[canonical]
+			c := r.byCanonical[canonicalID]
 			if c == nil {
-				c = make(map[string][]engine.UsageMatch)
-				r.byCanonical[canonical] = c
+				c = make(map[FileID][]UsageRef)
+				r.byCanonical[canonicalID] = c
 			}
-			c[file] = append(c[file], refs...)
+			c[fid] = append(c[fid], refs...)
 		}
 	}
 }
@@ -493,9 +630,15 @@ func (s *MemoryStore) estimateMemory(r *repo) int64 {
 	for _, m := range r.fileMemory {
 		total += m
 	}
+	for _, name := range r.names {
+		total += int64(len(name) + 8)
+	}
 	return total
 }
 
+// estimateFile estimates the compact stored size of one file's facts:
+// per-usage cost is the fixed UsageRef plus its text; names and callers are
+// interned and counted once globally (added by estimateMemory).
 func estimateFile(path string, facts *engine.FileIndex) int64 {
 	mem := int64(len(path) + len(facts.Language) + 64)
 	for _, groups := range facts.Symbols {
@@ -504,7 +647,7 @@ func estimateFile(path string, facts *engine.FileIndex) int64 {
 		}
 	}
 	for _, u := range facts.Usages {
-		mem += int64(len(u.Name) + len(u.Text) + len(u.Caller) + 48)
+		mem += int64(len(u.Text) + 40)
 	}
 	for _, c := range facts.Complexity {
 		mem += int64(len(c.Name) + len(c.Kind) + 32)
