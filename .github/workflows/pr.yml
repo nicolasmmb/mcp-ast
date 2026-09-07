@@ -1,0 +1,78 @@
+name: pr-build
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Vet and test
+        run: go vet ./... && go test ./...
+
+  build:
+    needs: test
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            runner: ubuntu-latest
+          - goos: darwin
+            goarch: arm64
+            runner: macos-14
+          - goos: windows
+            goarch: amd64
+            runner: windows-latest
+    env:
+      VERSION: pr-${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build PR binary
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 1
+        run: |
+          set -euo pipefail
+          ext=""
+          [ "$GOOS" = "windows" ] && ext=".exe"
+          out="ast-mcp-${GOOS}-${GOARCH}${ext}"
+          go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o "$out" ./cmd/ast-mcp
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            powershell -Command "(Get-FileHash -Algorithm SHA256 '$out').Hash.ToLower() + '  ' + '$out'" > "$out.sha256"
+          else
+            shasum -a 256 "$out" > "$out.sha256"
+          fi
+
+      - name: Quick smoke (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ext=""
+          [ "$GOOS" = "windows" ] && ext=".exe"
+          bin="./ast-mcp-${GOOS}-${GOARCH}${ext}"
+          "$bin" -version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ast-mcp-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: ast-mcp-*
