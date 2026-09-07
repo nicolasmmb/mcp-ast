@@ -141,6 +141,22 @@ Workflow único `.github/workflows/release.yml`:
 
 Binários: `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`, `windows/amd64`.
 
+## Benchmarks de escala (repo sintético, 50 mil arquivos)
+
+Fixture: 50k arquivos Go sintéticos, 2 funções e 1 referência compartilhada `token` por arquivo.
+Hardware: Apple M2 Pro (darwin/arm64). Comando: `go test ./internal/service -bench . -benchtime=1x`.
+
+| Cenário | Tempo | Alocações |
+|---|---:|---:|
+| `index_repo` (build completo) | ~6,5 s | ~1,07 GB / 14 M allocs |
+| `refresh_repo` sem mudanças (diff 50k) | ~222 ms | 57 MB |
+| `refresh_repo` com 1% alterado (500 arquivos) | ~994 ms | 188 MB |
+| lookup indexado (página de 500 em 50k ocorrências) | ~20 ms | 3,9 MB |
+| `repo_impact` reverse depth 1 | ~17 ms | 14 MB |
+
+Lookup indexado não repete walk/parse; o custo por página é a janela de postings
+(`UsagesWindow`), não a cardinalidade total.
+
 ## Instaladores
 
 - `install.sh` — bash (Linux/macOS/Git Bash): detecta OS/arch, baixa release, instala em `/usr/local/bin` ou `~/.local/bin`

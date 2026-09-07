@@ -342,25 +342,19 @@ func (s *RepoService) UsagePage(id, name, cursor string, limit int) (*UsagePage,
 	if err != nil {
 		return nil, err
 	}
-	matches, ok := s.store.Usages(id, name)
-	if !ok {
-		return nil, fmt.Errorf("unknown repository %q", id)
-	}
 	if limit <= 0 {
 		limit = 500
 	}
-	page := &UsagePage{}
-	if c.Offset > len(matches) {
-		c.Offset = len(matches)
+	matches, total, ok := s.store.UsagesWindow(id, name, c.Offset, limit)
+	if !ok {
+		return nil, fmt.Errorf("unknown repository %q", id)
 	}
+	page := &UsagePage{Matches: matches}
 	end := c.Offset + limit
-	if end > len(matches) {
-		end = len(matches)
-	} else {
+	if end < total {
 		page.Truncated = true
 		page.NextCursor = repoindex.EncodeCursor(info.Version, end)
 	}
-	page.Matches = append([]engine.UsageMatch(nil), matches[c.Offset:end]...)
 	return page, nil
 }
 

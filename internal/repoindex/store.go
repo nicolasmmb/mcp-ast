@@ -64,6 +64,7 @@ type Store interface {
 	Files(id string) (map[string]*engine.FileIndex, bool)
 	Symbols(id string) (map[string]map[string][]engine.Symbol, bool)
 	Usages(id, name string) ([]engine.UsageMatch, bool)
+	UsagesWindow(id, name string, offset, limit int) ([]engine.UsageMatch, int, bool)
 	Complexity(id string, limit int) ([]engine.RankedComplexity, bool)
 	Unused(id string) ([]engine.SearchMatch, bool)
 	Calls(id string) (CallGraph, bool)
@@ -431,42 +432,61 @@ func (s *MemoryStore) Symbols(id string) (map[string]map[string][]engine.Symbol,
 }
 
 func (s *MemoryStore) Usages(id, name string) ([]engine.UsageMatch, bool) {
+	matches, _, ok := s.UsagesWindow(id, name, 0, -1)
+	return matches, ok
+}
+
+// UsagesWindow returns a page of usages for name (or a canonical key
+// containing '|') in deterministic file-then-line order, plus the total
+// occurrence count. limit < 0 means no limit.
+func (s *MemoryStore) UsagesWindow(id, name string, offset, limit int) ([]engine.UsageMatch, int, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	r, ok := s.repos[id]
 	if !ok {
-		return nil, false
+		return nil, 0, false
 	}
+	byFile := r.usages[r.nameIDs[name]]
 	if strings.Contains(name, "|") {
-		return r.flattenUsages(r.nameIDs[name], r.byCanonical[r.nameIDs[name]]), true
+		byFile = r.byCanonical[r.nameIDs[name]]
 	}
-	return r.flattenUsages(r.nameIDs[name], r.usages[r.nameIDs[name]]), true
-}
-
-func (r *repo) flattenUsages(nameID NameID, byFile map[FileID][]UsageRef) []engine.UsageMatch {
-	out := make([]engine.UsageMatch, 0)
-	for fid, refs := range byFile {
+	fids := make([]FileID, 0, len(byFile))
+	for fid := range byFile {
+		fids = append(fids, fid)
+	}
+	sort.Slice(fids, func(i, j int) bool { return r.filePath(fids[i]) < r.filePath(fids[j]) })
+	out := make([]engine.UsageMatch, 0, 8)
+	total := 0
+	for _, fid := range fids {
 		path := r.filePath(fid)
-		for _, ref := range refs {
-			out = append(out, engine.UsageMatch{
-				File:      path,
-				Name:      r.nameOf(nameID),
-				Canonical: r.nameOf(ref.Canonical),
-				Line:      int(ref.Row) + 1,
-				Col:       int(ref.Col),
-				Text:      ref.Text,
-				Kind:      kindString(ref.Kind),
-				Caller:    r.nameOf(ref.Caller),
-			})
+		refs := byFile[fid]
+		sorted := append([]UsageRef(nil), refs...)
+		sort.Slice(sorted, func(i, j int) bool {
+			if sorted[i].Row != sorted[j].Row {
+				return sorted[i].Row < sorted[j].Row
+			}
+			return sorted[i].Col < sorted[j].Col
+		})
+		for _, ref := range sorted {
+			total++
+			if total <= offset {
+				continue
+			}
+			if limit < 0 || len(out) < limit {
+				out = append(out, engine.UsageMatch{
+					File:      path,
+					Name:      r.nameOf(r.nameIDs[name]),
+					Canonical: r.nameOf(ref.Canonical),
+					Line:      int(ref.Row) + 1,
+					Col:       int(ref.Col),
+					Text:      ref.Text,
+					Kind:      kindString(ref.Kind),
+					Caller:    r.nameOf(ref.Caller),
+				})
+			}
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].File != out[j].File {
-			return out[i].File < out[j].File
-		}
-		return out[i].Line < out[j].Line
-	})
-	return out
+	return out, total, true
 }
 
 func (s *MemoryStore) Complexity(id string, limit int) ([]engine.RankedComplexity, bool) {
