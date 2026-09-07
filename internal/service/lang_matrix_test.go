@@ -21,13 +21,13 @@ import (
 )
 
 type langFixture struct {
-	impl          lang.Language
-	file          string
-	primarySymbol string
-	callName      string
-	idQuery       string
-	expectedKinds map[string]string
-	expectCallee  string
+	impl           lang.Language
+	file           string
+	primarySymbol  string
+	callName       string // empty = skip call-based asserts
+	idQuery        string
+	expectedKinds  map[string]string // kind -> expected symbol name substring or exact
+	expectCallee   string
 }
 
 func allFixtures() []langFixture {
@@ -172,14 +172,15 @@ func TestMatrix_AllSymbolQueries(t *testing.T) {
 			if fileSyms == nil {
 				t.Fatal("no symbols map")
 			}
+			// Every declared SymbolQueries kind must return >=1 symbol and match expected name when set.
 			for kind := range f.impl.SymbolQueries() {
 				want, ok := f.expectedKinds[kind]
 				if !ok {
-					t.Fatalf("test table missing expectedKinds for %s/%s", f.impl.Name(), kind)
+					t.Fatalf("test table missing expectedKinds entry for %s/%s", f.impl.Name(), kind)
 				}
 				items := fileSyms[kind]
 				if len(items) == 0 {
-					t.Fatalf("symbol query %q returned 0 symbols", kind)
+					t.Fatalf("symbol query %q returned 0 symbols (fixture must exercise this query)", kind)
 				}
 				if want != "" && !hasName(items, want) {
 					t.Fatalf("kind %q: want name %q in %+v", kind, want, items)
@@ -195,28 +196,31 @@ func TestMatrix_AllAuxQueries(t *testing.T) {
 		t.Run(f.impl.Name(), func(t *testing.T) {
 			path := fixturePath(t, f.file)
 			l := f.impl
+			// identifiers
 			idQ, ok := l.AuxQueries()["identifiers"]
 			if !ok {
-				t.Fatal("missing identifiers")
+				t.Fatal("missing identifiers aux query")
 			}
 			matches, err := svcs.Engine.QueryText(l, path, idQ, 50, false)
 			if err != nil {
-				t.Fatal(err)
+				t.Fatalf("identifiers query: %v", err)
 			}
 			if len(matches) == 0 {
-				t.Fatal("identifiers: 0 matches")
+				t.Fatal("identifiers query returned 0 matches")
 			}
+			// calls
 			callQ, ok := l.AuxQueries()["calls"]
 			if !ok {
-				t.Fatal("missing calls")
+				t.Fatal("missing calls aux query")
 			}
 			cmatches, err := svcs.Engine.QueryText(l, path, callQ, 50, false)
 			if err != nil {
-				t.Fatal(err)
+				t.Fatalf("calls query: %v", err)
 			}
 			if f.expectCallee == "" {
+				// yaml: calls may match mapping keys — still require >=1 if query is declared
 				if len(cmatches) == 0 {
-					t.Fatal("calls: 0 matches")
+					t.Fatal("calls query returned 0 matches")
 				}
 				return
 			}
@@ -229,7 +233,7 @@ func TestMatrix_AllAuxQueries(t *testing.T) {
 				}
 			}
 			if !found {
-				t.Fatalf("calls: want callee %q in %+v", f.expectCallee, cmatches)
+				t.Fatalf("calls query: want callee %q in %+v", f.expectCallee, cmatches)
 			}
 		})
 	}
@@ -244,7 +248,7 @@ func TestMatrix_ParseAst(t *testing.T) {
 				t.Fatal(err)
 			}
 			if root == nil || root.Type == "" {
-				t.Fatal("empty AST")
+				t.Fatal("empty AST root")
 			}
 		})
 	}
@@ -282,7 +286,7 @@ func TestMatrix_OutlineAnalyzeGetText(t *testing.T) {
 				t.Fatal(err)
 			}
 			if rep.Metrics == nil || rep.Metrics.Nodes == 0 {
-				t.Fatal("empty metrics")
+				t.Fatalf("empty metrics %+v", rep.Metrics)
 			}
 			syms, err := svcs.Engine.Symbols(f.impl, path)
 			if err != nil {
@@ -293,11 +297,12 @@ func TestMatrix_OutlineAnalyzeGetText(t *testing.T) {
 				for _, s := range list {
 					if s.Name == f.primarySymbol {
 						target = s
+						break
 					}
 				}
 			}
 			if target.Name == "" {
-				t.Fatalf("primary %q missing", f.primarySymbol)
+				t.Fatalf("primary symbol %q not found", f.primarySymbol)
 			}
 			text, err := svcs.Engine.GetText(f.impl, path, target.Start, target.End)
 			if err != nil {
@@ -319,8 +324,14 @@ func TestMatrix_RankComplexity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if f.impl.Name() != "yaml" && len(res.Entries) == 0 {
-				t.Fatal("expected complexity entries")
+			// langs with functions/methods should produce entries
+			switch f.impl.Name() {
+			case "yaml":
+				// may be empty
+			default:
+				if len(res.Entries) == 0 {
+					t.Fatal("expected complexity entries")
+				}
 			}
 		})
 	}
@@ -334,24 +345,32 @@ func TestMatrix_FindUsagesModes(t *testing.T) {
 			continue
 		}
 		t.Run(f.impl.Name(), func(t *testing.T) {
-			if _, err := svcs.Find.Dir(context.Background(), service.FindQuery{
+			occ, err := svcs.Find.Dir(context.Background(), service.FindQuery{
 				Mode: service.FindOccurrences, Name: f.callName, Dir: dir,
 				Languages: []string{f.impl.Name()}, GroupByFile: true,
-			}); err != nil {
+			})
+			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := svcs.Find.Dir(context.Background(), service.FindQuery{
+			if len(occ.Files) == 0 && len(occ.Matches) == 0 {
+				t.Fatalf("no occurrences for %q", f.callName)
+			}
+			callers, err := svcs.Find.Dir(context.Background(), service.FindQuery{
 				Mode: service.FindCallers, Name: f.callName, Dir: dir,
 				Languages: []string{f.impl.Name()},
-			}); err != nil {
+			})
+			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := svcs.Find.Dir(context.Background(), service.FindQuery{
+			_ = callers
+			defs, err := svcs.Find.Dir(context.Background(), service.FindQuery{
 				Mode: service.FindDefinitions, Name: f.callName, Dir: dir,
 				Languages: []string{f.impl.Name()},
-			}); err != nil {
+			})
+			if err != nil {
 				t.Fatal(err)
 			}
+			_ = defs
 		})
 	}
 }
