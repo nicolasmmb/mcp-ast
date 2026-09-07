@@ -313,6 +313,27 @@ func jsonOut(v any) string {
 	return string(data)
 }
 
+func TestRepoServiceRefreshCoalesced(t *testing.T) {
+	svcs := testRepoServices(t, 1<<30)
+	dir, _, _ := writeFixture(t)
+	info, err := svcs.Repo.Index(context.Background(), dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitReady(t, svcs, info.ID)
+
+	lock := svcs.Repo.refreshLock(info.ID)
+	lock.Lock() // simulate an in-flight refresh
+	defer lock.Unlock()
+	res, err := svcs.Repo.Refresh(context.Background(), info.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.State != "refreshing" {
+		t.Fatalf("concurrent refresh should coalesce into refreshing, got %q", res.State)
+	}
+}
+
 func TestRepoServiceUnknownID(t *testing.T) {
 	svcs := testRepoServices(t, 1<<30)
 	if _, err := svcs.Repo.Status("nope"); err == nil {

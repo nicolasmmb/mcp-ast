@@ -3,19 +3,30 @@ package service
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 
 	"mcp-ast/internal/engine"
 	"mcp-ast/internal/lang"
 	"mcp-ast/internal/repoindex"
 )
 
+// errUnstable marks files that keep changing while being indexed.
+var errUnstable = errors.New("file changed while being indexed")
+
 type RepoService struct {
-	eng   *engine.Engine
-	store repoindex.Store
+	eng          *engine.Engine
+	store        repoindex.Store
+	refreshLocks sync.Map // repo id -> *sync.Mutex (refresh coalescing)
+}
+
+func (s *RepoService) refreshLock(id string) *sync.Mutex {
+	mu, _ := s.refreshLocks.LoadOrStore(id, &sync.Mutex{})
+	return mu.(*sync.Mutex)
 }
 
 func (s *RepoService) Index(ctx context.Context, dir string, languages []string) (repoindex.Info, error) {
@@ -88,7 +99,8 @@ func (s *RepoService) loadIndexed(path string, facts *engine.FileIndex, errs map
 
 // Refresh recomputes the delta between the indexed snapshot and the filesystem.
 // Small deltas apply incrementally; large ones trigger a full background
-// rebuild.
+// rebuild. A second concurrent refresh for the same repo is coalesced: it
+// returns the current state without starting another pass.
 func (s *RepoService) Refresh(ctx context.Context, id string, languages []string) (repoindex.Info, error) {
 	info, ok := s.store.Info(id)
 	if !ok {
@@ -97,6 +109,12 @@ func (s *RepoService) Refresh(ctx context.Context, id string, languages []string
 	if len(info.Root) == 0 {
 		return repoindex.Info{}, fmt.Errorf("repository %q has no root", id)
 	}
+	lock := s.refreshLock(id)
+	if !lock.TryLock() {
+		info.State = "refreshing"
+		return info, nil
+	}
+	defer lock.Unlock()
 	filters, err := filters(s.eng, languages, info.Root)
 	if err != nil {
 		return repoindex.Info{}, err
@@ -121,48 +139,73 @@ func (s *RepoService) Refresh(ctx context.Context, id string, languages []string
 	if len(added) == 0 && len(changed) == 0 && len(deleted) == 0 {
 		return info, nil
 	}
-	cs := repoindex.ChangeSet{Added: map[string]repoindex.IndexedFile{}, Updated: map[string]repoindex.IndexedFile{}, Deleted: deleted}
+	cs := repoindex.ChangeSet{
+		Added:   map[string]repoindex.IndexedFile{},
+		Updated: map[string]repoindex.IndexedFile{},
+		Deleted: deleted,
+		Errors:  map[string]string{},
+	}
 	for _, p := range added {
-		if indexed, ok := s.indexPath(p, meta); ok {
-			cs.Added[p] = indexed
-		} else {
+		indexed, err := s.indexPath(p, meta)
+		switch {
+		case errors.Is(err, errUnstable):
+			cs.Errors[p] = err.Error()
+		case err != nil:
 			cs.Deleted = append(cs.Deleted, p)
+			cs.Errors[p] = err.Error()
+		case indexed.Facts != nil:
+			cs.Added[p] = indexed
 		}
 	}
 	for _, p := range changed {
-		if indexed, ok := s.indexPath(p, meta); ok {
-			cs.Updated[p] = indexed
-		} else {
+		indexed, err := s.indexPath(p, meta)
+		switch {
+		case errors.Is(err, errUnstable):
+			cs.Errors[p] = err.Error()
+		case err != nil:
 			cs.Deleted = append(cs.Deleted, p)
+			cs.Errors[p] = err.Error()
+		case indexed.Facts != nil:
+			cs.Updated[p] = indexed
 		}
 	}
 	return s.store.Apply(id, cs)
 }
 
 // indexPath parses a single file into indexed facts with fresh metadata. A
-// changed file whose digest equals the stored one is reported as unchanged and
-// is not re-parsed.
-func (s *RepoService) indexPath(p string, meta map[string]repoindex.IndexedFile) (repoindex.IndexedFile, bool) {
-	st, err := os.Stat(p)
-	if err != nil {
-		return repoindex.IndexedFile{}, false
+// changed file whose digest equals the stored one is reported as unchanged.
+// The file is re-statted after parsing: if it changed during the read it is
+// retried once, then marked unstable.
+func (s *RepoService) indexPath(p string, meta map[string]repoindex.IndexedFile) (repoindex.IndexedFile, error) {
+	for attempt := 0; attempt < 2; attempt++ {
+		st, err := os.Stat(p)
+		if err != nil {
+			return repoindex.IndexedFile{}, err
+		}
+		digest, err := fileDigest(p)
+		if err != nil {
+			return repoindex.IndexedFile{}, err
+		}
+		if prev, ok := meta[p]; ok && prev.Size == st.Size() && prev.Digest == digest {
+			return repoindex.IndexedFile{}, nil
+		}
+		l, err := s.eng.Resolve("", p)
+		if err != nil {
+			return repoindex.IndexedFile{}, err
+		}
+		facts, err := s.eng.IndexFile(l, p)
+		if err != nil {
+			return repoindex.IndexedFile{}, err
+		}
+		after, err := os.Stat(p)
+		if err != nil {
+			return repoindex.IndexedFile{}, err
+		}
+		if after.Size() == st.Size() && after.ModTime().UnixNano() == st.ModTime().UnixNano() {
+			return repoindex.IndexedFile{Facts: facts, Size: st.Size(), ModTime: st.ModTime().UnixNano(), Digest: digest}, nil
+		}
 	}
-	digest, err := fileDigest(p)
-	if err != nil {
-		return repoindex.IndexedFile{}, false
-	}
-	if prev, ok := meta[p]; ok && prev.Size == st.Size() && prev.Digest == digest {
-		return repoindex.IndexedFile{}, false
-	}
-	l, err := s.eng.Resolve("", p)
-	if err != nil {
-		return repoindex.IndexedFile{}, false
-	}
-	facts, err := s.eng.IndexFile(l, p)
-	if err != nil {
-		return repoindex.IndexedFile{}, false
-	}
-	return repoindex.IndexedFile{Facts: facts, Size: st.Size(), ModTime: st.ModTime().UnixNano(), Digest: digest}, true
+	return repoindex.IndexedFile{}, errUnstable
 }
 
 // diff walks the filesystem once and classifies every path against meta.
@@ -313,8 +356,11 @@ func (s *RepoService) freshFacts(id, path string) (*engine.FileIndex, error) {
 	if digest == f.Digest {
 		return f.Facts, nil
 	}
-	indexed, ok := s.indexPath(path, meta)
-	if !ok {
+	indexed, err := s.indexPath(path, meta)
+	if err != nil {
+		return nil, nil
+	}
+	if indexed.Facts == nil {
 		return nil, nil
 	}
 	if _, err := s.store.Apply(id, repoindex.ChangeSet{Updated: map[string]repoindex.IndexedFile{path: indexed}}); err != nil {

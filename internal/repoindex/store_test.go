@@ -197,6 +197,29 @@ func TestCompactEquivalence(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreApplyErrors(t *testing.T) {
+	store := NewMemory(0)
+	info := store.Create("/repo")
+	if _, err := store.Replace(info.ID, map[string]IndexedFile{"/repo/a.go": fileFacts("/repo/a.go", "go")}, nil); err != nil {
+		t.Fatal(err)
+	}
+	info, err := store.Apply(info.ID, ChangeSet{Errors: map[string]string{"/repo/x.go": "read error"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Errors != 1 || info.LastErrors["/repo/x.go"] != "read error" {
+		t.Fatalf("errors not reported: %#v", info)
+	}
+	// a successful update clears the error for that file
+	info, err = store.Apply(info.ID, ChangeSet{Updated: map[string]IndexedFile{"/repo/x.go": fileFacts("/repo/x.go", "go")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Errors != 0 {
+		t.Fatalf("error should clear after successful update: %#v", info)
+	}
+}
+
 func TestParseMemoryLimit(t *testing.T) {
 	for _, bad := range []string{"2048", "2gb", "2048mbx", "-1mb", ""} {
 		if _, err := ParseMemoryLimit(bad); err == nil {

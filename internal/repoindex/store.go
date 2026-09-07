@@ -26,23 +26,26 @@ type IndexedFile struct {
 	Digest  [32]byte
 }
 
-// ChangeSet is the delta produced by refresh_repo.
+// ChangeSet is the delta produced by refresh_repo. Errors maps per-file
+// failures (unreadable, unstable during parse) reported by the refresh.
 type ChangeSet struct {
 	Added   map[string]IndexedFile
 	Updated map[string]IndexedFile
 	Deleted []string
+	Errors  map[string]string
 }
 
 type Info struct {
-	ID          string    `json:"repo_id"`
-	Root        string    `json:"root"`
-	State       string    `json:"state"`
-	Version     uint64    `json:"index_version"`
-	Files       int       `json:"files_indexed"`
-	Errors      int       `json:"files_failed"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	MemoryBytes int64     `json:"memory_used_bytes"`
-	MemoryLimit int64     `json:"memory_budget_bytes"`
+	ID          string            `json:"repo_id"`
+	Root        string            `json:"root"`
+	State       string            `json:"state"`
+	Version     uint64            `json:"index_version"`
+	Files       int               `json:"files_indexed"`
+	Errors      int               `json:"files_failed"`
+	LastErrors  map[string]string `json:"last_errors,omitempty"`
+	UpdatedAt   time.Time         `json:"updated_at"`
+	MemoryBytes int64             `json:"memory_used_bytes"`
+	MemoryLimit int64             `json:"memory_budget_bytes"`
 }
 
 // Store is the persistence boundary. A SQLite implementation can replace the
@@ -247,6 +250,10 @@ func (s *MemoryStore) Replace(id string, files map[string]IndexedFile, errs map[
 		memory += r.insert(fid, &cp)
 	}
 	r.errors = errs
+	if r.errors == nil {
+		r.errors = map[string]string{}
+	}
+	r.info.LastErrors = cappedErrors(r.errors)
 	r.enrich()
 	r.calls = buildCallGraph(r.filesByPath())
 	r.imports = buildImportGraph(r.filesByPath())
@@ -275,20 +282,31 @@ func (s *MemoryStore) Apply(id string, changes ChangeSet) (Info, error) {
 	}
 	for _, p := range changes.Deleted {
 		r.remove(r.fileIDs[p])
+		delete(r.errors, p)
 	}
 	for p, f := range changes.Updated {
 		r.remove(r.fileIDs[p])
+		delete(r.errors, p)
 		fid := r.internFile(p)
 		cp := f
 		r.files[fid] = &cp
 		r.insert(fid, &cp)
 	}
 	for p, f := range changes.Added {
+		delete(r.errors, p)
 		fid := r.internFile(p)
 		cp := f
 		r.files[fid] = &cp
 		r.insert(fid, &cp)
 	}
+	for p, e := range changes.Errors {
+		if r.errors == nil {
+			r.errors = map[string]string{}
+		}
+		r.errors[p] = e
+	}
+	// ponytail: full graph rebuild per Apply; incremental graph surgery if
+	// refresh on 50k-file repos measures this as a hotspot.
 	sort.Slice(r.complexity, func(i, j int) bool { return cmpComplexity(r.complexity[i], r.complexity[j]) })
 	r.enrich()
 	r.calls = buildCallGraph(r.filesByPath())
@@ -296,6 +314,7 @@ func (s *MemoryStore) Apply(id string, changes ChangeSet) (Info, error) {
 	info := r.info
 	info.MemoryBytes = s.estimateMemory(r)
 	info.UpdatedAt = time.Now().UTC()
+	info.LastErrors = cappedErrors(r.errors)
 	if s.limit > 0 && info.MemoryBytes > s.limit {
 		info.State = "partial"
 		info.Files = 0
@@ -653,6 +672,21 @@ func estimateFile(path string, facts *engine.FileIndex) int64 {
 		mem += int64(len(c.Name) + len(c.Kind) + 32)
 	}
 	return mem
+}
+
+// cappedErrors caps the exposed error map so repo_status stays bounded.
+func cappedErrors(errs map[string]string) map[string]string {
+	if len(errs) == 0 {
+		return nil
+	}
+	out := make(map[string]string, min(len(errs), 50))
+	for p, e := range errs {
+		out[p] = e
+		if len(out) >= 50 {
+			break
+		}
+	}
+	return out
 }
 
 func itoa(n uint64) string {
