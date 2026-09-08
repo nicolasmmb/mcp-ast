@@ -107,12 +107,12 @@ func (s *RepoService) Index(ctx context.Context, dir string, languages []string)
 			if os.IsNotExist(err) {
 				s.log().Debug(fmt.Sprintf("no snapshot for %s: full index build", root), "root", root)
 			} else {
-				s.log().Info(fmt.Sprintf("snapshot unusable, full index build (reason: %s)", err), "root", root)
+				s.log().Warn(fmt.Sprintf("snapshot corrupt, full index build (reason: %s)", err), "root", root)
 			}
 		} else if !snap.Header.Valid(repoindex.SnapshotSchemaVersion, s.toolVersion, root, langsKey) {
-			s.log().Info("snapshot unusable, full index build (reason: header mismatch — schema, version, root or languages changed)", "root", root)
+			s.log().Warn("snapshot expired, full index build (reason: header mismatch — schema, version, root or languages changed)", "root", root)
 		} else if _, err := s.store.Replace(info.ID, snap.Files, nil); err != nil {
-			s.log().Info(fmt.Sprintf("snapshot unusable, full index build (reason: %s)", err), "root", root)
+			s.log().Warn(fmt.Sprintf("snapshot corrupt, full index build (reason: %s)", err), "root", root)
 		} else {
 			info, _ = s.store.SetCache(info.ID, true, path)
 			if s.watchInterval > 0 {

@@ -30,7 +30,19 @@ import (
 )
 
 // version is injected at build time with -ldflags "-X main.version=vX.Y.Z".
-var version = "dev"
+// commit is the short git hash, injected with "-X main.commit=$(git rev-parse --short HEAD)".
+var (
+	version = "dev"
+	commit  = ""
+)
+
+// displayVersion returns the version string with commit hash when available.
+func displayVersion() string {
+	if commit != "" {
+		return version + "-" + commit
+	}
+	return version
+}
 
 // stringList accumulates a repeatable flag value.
 type stringList []string
@@ -70,7 +82,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("ast-mcp %s\n", version)
+		fmt.Printf("ast-mcp %s\n", displayVersion())
 		return
 	}
 	if err := validateRepoDirs(repoDirs); err != nil {
@@ -99,7 +111,7 @@ func main() {
 		logDest = "stderr (no file)"
 	}
 	logger.Info(fmt.Sprintf("ast-mcp %s started: tool timeout %s, %d languages (%s), log at %s",
-		version, timeout.String(), len(reg.List()), strings.Join(reg.List(), ", "), logDest))
+		displayVersion(), timeout.String(), len(reg.List()), strings.Join(reg.List(), ", "), logDest))
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "ast-mcp", Version: version}, nil)
 	svcs := service.NewWithStore(engine.New(reg), repoindex.NewMemory(memoryLimit))
@@ -116,7 +128,16 @@ func main() {
 		if err != nil {
 			log.Fatalf("indexing -repo %s: %v", dir, err)
 		}
-		logger.Info(fmt.Sprintf("indexing started for %s (state: %s, restored: %t)", dir, info.State, info.Restored), "dir", dir)
+		if info.State == "ready" && info.Restored {
+			logger.Info(fmt.Sprintf("index ready for %s (restored: %d %s, %s RAM)", dir, info.Files, plural(info.Files, "file", "files"), formatBytes(info.MemoryBytes)), "dir", dir)
+		} else if info.State == "building" {
+			logger.Warn(fmt.Sprintf("index building for %s — queries use disk until ready (check index_status)", dir), "dir", dir)
+		} else {
+			logger.Info(fmt.Sprintf("index %s for %s (%d %s)", info.State, dir, info.Files, plural(info.Files, "file", "files")), "dir", dir)
+		}
+	}
+	if len(repoDirs) == 0 {
+		logger.Warn("no -repo configured: server running fully on disk, no index will be built or loaded")
 	}
 	tools.Register(server, svcs)
 
@@ -146,4 +167,30 @@ func newLogger(verbose bool, logPath string) (*slog.Logger, func()) {
 		}
 	}
 	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: level})), closeLog
+}
+
+// formatBytes formats a byte count for log messages ("794 B", "14.2 MB").
+func formatBytes(n int64) string {
+	if n < 0 {
+		return "missing"
+	}
+	if n < 1024 {
+		return fmt.Sprintf("%d B", n)
+	}
+	f := float64(n)
+	for _, u := range []string{"KB", "MB", "GB"} {
+		f /= 1024
+		if f < 1024 {
+			return fmt.Sprintf("%.1f %s", f, u)
+		}
+	}
+	return fmt.Sprintf("%.1f TB", f/1024)
+}
+
+// plural picks the singular or plural noun for log messages.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
