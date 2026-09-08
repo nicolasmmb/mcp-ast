@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -16,6 +17,22 @@ func TestRepoFlagAccumulates(t *testing.T) {
 	}
 	if len(dirs) != 3 || dirs[0] != "/a" || dirs[1] != "/b" || dirs[2] != "/c" {
 		t.Fatalf("want [/a /b /c], got %v", dirs)
+	}
+}
+
+func TestNewLoggerFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ast.log")
+	logger, closeLog := newLogger(false, path)
+	logger.Info("hello log file")
+	if closeLog != nil {
+		closeLog()
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "hello log file") {
+		t.Fatalf("log file missing test line: %q", data)
 	}
 }
 

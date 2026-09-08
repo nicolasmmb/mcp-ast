@@ -58,8 +58,8 @@ func validateRepoDirs(dirs []string) error {
 
 func main() {
 	timeout := flag.Duration("tool-timeout", 30*time.Second, "per-tool-call timeout (0 disables)")
-	verbose := flag.Bool("verbose", false, "log debug output to stderr")
-	logPath := flag.String("log", "", "write log to file (append)")
+	verbose := flag.Bool("verbose", false, "also log debug output to stderr (info always goes to stderr)")
+	logPath := flag.String("log", "", "append logs to file (in addition to stderr)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	maxMemory := flag.String("max-memory", "auto", "repository index memory limit in MB, or auto")
 	var repoDirs stringList
@@ -120,28 +120,22 @@ func main() {
 	}
 }
 
-// newLogger builds a slog logger: -verbose enables debug level on stderr,
-// -log appends to a file. Neither flag leaves logging disabled.
+// newLogger builds a slog logger: Info (Debug with -verbose) always goes to
+// stderr so the MCP debug console shows it; -log additionally appends to a
+// file (and routes std log there too).
 func newLogger(verbose bool, logPath string) (*slog.Logger, func()) {
 	level := slog.LevelInfo
 	if verbose {
 		level = slog.LevelDebug
 	}
-	var w io.Writer = io.Discard
-	if verbose {
-		w = os.Stderr
-	}
+	var w io.Writer = os.Stderr
 	var closeLog func()
 	if logPath != "" {
 		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: cannot open log file %s: %v\n", logPath, err)
 		} else {
-			if w == os.Stderr {
-				w = io.MultiWriter(os.Stderr, f)
-			} else {
-				w = f
-			}
+			w = io.MultiWriter(os.Stderr, f)
 			closeLog = func() { f.Close() }
 			log.SetOutput(io.MultiWriter(os.Stderr, f))
 		}
