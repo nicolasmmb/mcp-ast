@@ -77,6 +77,9 @@ func (s *RepoService) Index(ctx context.Context, dir string, languages []string)
 	if err != nil {
 		return repoindex.Info{}, err
 	}
+	if old, ok := s.roots.Load(root); ok {
+		_ = s.drop(old.(string))
+	}
 	info := s.store.Create(root)
 	s.roots.Store(root, info.ID)
 	path := s.snapshotPath(root)
@@ -135,6 +138,9 @@ func (s *RepoService) drop(id string) error {
 		}
 		return true
 	})
+	s.watchLangs.Delete(id)
+	s.snapshotLangs.Delete(id)
+	s.refreshLocks.Delete(id)
 	return nil
 }
 

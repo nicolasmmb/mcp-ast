@@ -1,6 +1,38 @@
 # Plano — Index-First sem `repo_id`
 
-Status geral: CONCLUÍDO
+Status geral: S1–S5 CONCLUÍDO; R1 DONE; R2–R3 em andamento.
+
+Nota S5: gate estrito confirmado — nomes antigos zerados de README/ARCHITECTURE (commit 5e8df4e).
+
+---
+
+## Follow-up — R1–R3
+
+### R1 — Raiz duplicada remove o dono anterior — [DONE]
+
+- [x] R1.1 `Index`: se `roots.Load(root)` existir, `s.drop(oldID)` antes do `Create`.
+- [x] R1.2 `drop`: limpar `watchLangs`/`snapshotLangs`/`refreshLocks` do id.
+- [x] R1.3 Testes: reindex da mesma raiz substitui (store sem id1, `List` 1 item, `ResolveIndex` → id2); mapas sem chave id1.
+
+**Pronto quando:** `-repo /a -repo /a` = 1 repositório; watcher zumbi termina no próximo tick.
+**Validação:** `go test ./internal/service -run TestRepoServiceReindex -race`
+**Commit:** `fix(repo): drop previous index when a root is indexed again`
+
+### R2 — Deletar `usages` sem chamador — [PENDING]
+
+- [ ] R2.1 Deletar `usages` (repo.go).
+- [ ] R2.2 Migrar call sites: repo_test 110, 145; bench_test 179 → `findUsages(...).Matches`.
+- [ ] R2.3 `startWatch`: remover `_ = info` morto.
+- [ ] R2.4 Grep final de métodos órfãos (exceção registrada: `status`/`findUsages`).
+
+**Commit:** `refactor(repo): remove unused usages helper`
+
+### R3 — PR 13 descreve o modelo novo — [PENDING]
+
+- [ ] R3.1 Corpo+título novos (breaking, 13 tools, flags, hashes, como testar).
+- [ ] R3.2 `gh pr edit 13`.
+- [ ] R3.3 Conferência: body sem `repo_id`/`index_repo`/`search_repo`/`17 tools`.
+- [ ] R3.4 Push do branch.
 Branch: `feat/repo-mode`
 Regra: uma história por commit. Gate por história: "Pronto quando" + validação + `go test ./...`, `go vet ./...`, `git diff --check` verdes.
 

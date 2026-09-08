@@ -624,6 +624,44 @@ func TestRepoServiceUnknownID(t *testing.T) {
 	}
 }
 
+func TestRepoServiceReindexSameRootReplaces(t *testing.T) {
+	svcs := testRepoServices(t, 1<<30)
+	ctx := context.Background()
+	dir, _, _ := writeFixture(t)
+
+	first, err := svcs.Repo.Index(ctx, dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitReady(t, svcs, first.ID)
+
+	second, err := svcs.Repo.Index(ctx, dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitReady(t, svcs, second.ID)
+
+	if first.ID == second.ID {
+		t.Fatal("reindex of the same root must create a new repository")
+	}
+	if _, ok := svcs.Repo.store.Info(first.ID); ok {
+		t.Fatal("previous repository of the root must be dropped")
+	}
+	repos := svcs.Repo.List()
+	if len(repos) != 1 || repos[0].ID != second.ID {
+		t.Fatalf("want only the new repository, got %v", repos)
+	}
+	if got, ok := svcs.Repo.ResolveIndex(dir); !ok || got.ID != second.ID {
+		t.Fatalf("root must resolve to the new repository: ok=%v got=%v", ok, got)
+	}
+	if _, ok := svcs.Repo.watchLangs.Load(first.ID); ok {
+		t.Fatal("watchLangs must not keep a dropped repository")
+	}
+	if _, ok := svcs.Repo.snapshotLangs.Load(first.ID); ok {
+		t.Fatal("snapshotLangs must not keep a dropped repository")
+	}
+}
+
 func TestRepoServiceResolveIndexPath(t *testing.T) {
 	svcs := testRepoServices(t, 1<<30)
 	ctx := context.Background()
