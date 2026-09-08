@@ -99,6 +99,7 @@ func main() {
 		defer closeLog()
 	}
 	tools.SetLogger(logger)
+	logger.Debug(fmt.Sprintf("os.Args: %v", os.Args))
 
 	reg := lang.NewRegistry()
 	for _, l := range []lang.Language{java.Java{}, python.Python{}, golanglang.Go{}, bash.Bash{}, csharp.CSharp{}, javascript.JavaScript{}, rust.Rust{}, typescript.TypeScript{}, yaml.YAML{}} {
