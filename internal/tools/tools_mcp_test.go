@@ -48,9 +48,14 @@ func buildServer(t *testing.T) string {
 
 func mcpSession(t *testing.T, bin string, afterInit []string) []map[string]any {
 	t.Helper()
+	return mcpSessionWithArgs(t, bin, nil, afterInit)
+}
+
+func mcpSessionWithArgs(t *testing.T, bin string, args []string, afterInit []string) []map[string]any {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin)
+	cmd := exec.CommandContext(ctx, bin, args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -171,5 +176,38 @@ func TestMCP_ListLanguages_Call(t *testing.T) {
 	}
 	if !strings.Contains(s, "elapsed_ms") {
 		t.Fatalf("expected elapsed_ms: %s", s)
+	}
+}
+
+func TestMCP_IndexStatus_WithRepo(t *testing.T) {
+	bin := buildServer(t)
+	dir := t.TempDir()
+	goFile := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(goFile, []byte("package main\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resps := mcpSessionWithArgs(t, bin, []string{"-repo", dir}, []string{
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"index_status","arguments":{}}}`,
+	})
+	var call map[string]any
+	for _, r := range resps {
+		if r["id"] == float64(2) {
+			call = r
+			break
+		}
+	}
+	if call == nil {
+		t.Fatalf("no index_status response: %#v", resps)
+	}
+	raw, _ := json.Marshal(call)
+	s := string(raw)
+	if !strings.Contains(s, `"state":"ready"`) {
+		t.Fatalf("expected state=ready: %s", s)
+	}
+	if !strings.Contains(s, `"files_indexed":1`) {
+		t.Fatalf("expected files_indexed=1: %s", s)
+	}
+	if !strings.Contains(s, `"watch":true`) {
+		t.Fatalf("expected watch=true: %s", s)
 	}
 }
