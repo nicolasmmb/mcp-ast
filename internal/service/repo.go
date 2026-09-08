@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -24,6 +25,7 @@ var errUnstable = errors.New("file changed while being indexed")
 type RepoService struct {
 	eng           *engine.Engine
 	store         repoindex.Store
+	logger        *slog.Logger
 	roots         sync.Map // abs root -> repo id (index-first path resolution)
 	refreshLocks  sync.Map // repo id -> *sync.Mutex (refresh coalescing)
 	watchLangs    sync.Map // repo id -> languages used at index time
@@ -32,6 +34,18 @@ type RepoService struct {
 	toolVersion   string
 	cacheDir      string
 	snapshotMu    sync.Mutex
+}
+
+// SetLogger routes index operation logs to the server logger (stderr/-log file).
+func (s *RepoService) SetLogger(l *slog.Logger) { s.logger = l }
+
+// log returns the service logger, falling back to the slog default for
+// direct constructions (tests).
+func (s *RepoService) log() *slog.Logger {
+	if s.logger != nil {
+		return s.logger
+	}
+	return slog.Default()
 }
 
 // SetToolVersion enables snapshot persistence: snapshots are only saved and

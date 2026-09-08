@@ -99,6 +99,7 @@ func main() {
 	server := mcp.NewServer(&mcp.Implementation{Name: "ast-mcp", Version: version}, nil)
 	svcs := service.NewWithStore(engine.New(reg), repoindex.NewMemory(memoryLimit))
 	svcs.Repo.SetToolVersion(version)
+	svcs.Repo.SetLogger(logger)
 	if *cacheDir != "" {
 		svcs.Repo.SetCacheDir(*cacheDir)
 	}
@@ -110,7 +111,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("indexing -repo %s: %v", dir, err)
 		}
-		logger.Info("repo indexed", "dir", dir, "state", info.State, "restored", info.Restored)
+		logger.Info("repo index started", "dir", dir, "state", info.State, "restored", info.Restored)
 	}
 	tools.Register(server, svcs)
 
@@ -142,6 +143,7 @@ func newLogger(verbose bool, logPath string) (*slog.Logger, func()) {
 				w = f
 			}
 			closeLog = func() { f.Close() }
+			log.SetOutput(io.MultiWriter(os.Stderr, f))
 		}
 	}
 	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: level})), closeLog
