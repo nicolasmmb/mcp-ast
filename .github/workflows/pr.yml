@@ -54,7 +54,8 @@ jobs:
           ext=""
           [ "$GOOS" = "windows" ] && ext=".exe"
           out="ast-mcp-${GOOS}-${GOARCH}${ext}"
-          go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o "$out" ./cmd/ast-mcp
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          go build -trimpath -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${SHORT_SHA}" -o "$out" ./cmd/ast-mcp
           if [ "$RUNNER_OS" = "Windows" ]; then
             powershell -Command "(Get-FileHash -Algorithm SHA256 '$out').Hash.ToLower() + '  ' + '$out'" > "$out.sha256"
           else
