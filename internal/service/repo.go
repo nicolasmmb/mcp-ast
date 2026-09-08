@@ -457,6 +457,7 @@ func (s *RepoService) refresh(ctx context.Context, id string, languages []string
 		return info, nil
 	}
 	defer lock.Unlock()
+	start := time.Now()
 	filters, err := filters(s.eng, languages, info.Root)
 	if err != nil {
 		return repoindex.Info{}, err
@@ -471,6 +472,10 @@ func (s *RepoService) refresh(ctx context.Context, id string, languages []string
 	}
 	threshold := maxInt(500, len(meta)/5)
 	if len(added)+len(changed)+len(deleted) > threshold {
+		s.log().Info("delta exceeds threshold, full rebuild",
+			"root", info.Root,
+			"added", len(added), "changed", len(changed), "deleted", len(deleted),
+			"threshold", threshold)
 		info, err = s.store.SetState(id, "refreshing")
 		if err != nil {
 			return repoindex.Info{}, err
@@ -516,6 +521,13 @@ func (s *RepoService) refresh(ctx context.Context, id string, languages []string
 		return repoindex.Info{}, err
 	}
 	s.saveSnapshot(id)
+	s.log().Info("index refreshed",
+		"root", info.Root,
+		"duration_ms", time.Since(start).Milliseconds(),
+		"added", len(cs.Added), "updated", len(cs.Updated), "deleted", len(cs.Deleted),
+		"files", info.Files,
+		"failed", info.Errors,
+		"mem_bytes", info.MemoryBytes)
 	return info, nil
 }
 
