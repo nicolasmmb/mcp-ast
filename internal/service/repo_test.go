@@ -1,12 +1,15 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -89,6 +92,57 @@ func TestRepoServiceIndexAndQuery(t *testing.T) {
 	}
 	if len(ranked) == 0 || ranked[0].Complexity != ranked[0].Complexity {
 		t.Fatalf("unexpected complexity: %#v", ranked)
+	}
+}
+
+// logBuf is a concurrency-safe buffer: index logs are written from the
+// build goroutine while the test polls the contents.
+type logBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *logBuf) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *logBuf) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+func TestRepoBuildLog(t *testing.T) {
+	buf := &logBuf{}
+	svcs := testRepoServices(t, 1<<30)
+	svcs.Repo.SetLogger(slog.New(slog.NewTextHandler(buf, nil)))
+	dir, _, _ := writeFixture(t)
+	info, err := svcs.Repo.Index(context.Background(), dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitReady(t, svcs, info.ID)
+	line := ""
+	deadline := time.Now().Add(2 * time.Second)
+	for line == "" && time.Now().Before(deadline) {
+		for _, l := range strings.Split(buf.String(), "\n") {
+			if strings.Contains(l, "index built") {
+				line = l
+			}
+		}
+		if line == "" {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if line == "" {
+		t.Fatalf("no 'index built' line in log output:\n%s", buf.String())
+	}
+	for _, want := range []string{"index built", "duration_ms=", "files=2", "failed=0", "mem_bytes=", "snapshot_bytes="} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("log line missing %q: %s", want, line)
+		}
 	}
 }
 

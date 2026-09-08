@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -312,12 +313,14 @@ func (s *RepoService) status(id string) (repoindex.Info, error) {
 
 // build indexes every recognized file under root and replaces the snapshot.
 func (s *RepoService) build(ctx context.Context, id, root string, filters []lang.Language) {
+	start := time.Now()
 	files := make(map[string]repoindex.IndexedFile)
 	errs := make(map[string]string)
 	for _, f := range filters {
 		facts, fileErrs, err := s.eng.IndexDir(ctx, root, f)
 		if err != nil {
 			errs[root] = err.Error()
+			s.log().Warn("index dir scan failed", "root", root, "error", err)
 			break
 		}
 		for p, fact := range facts {
@@ -330,8 +333,45 @@ func (s *RepoService) build(ctx context.Context, id, root string, filters []lang
 			errs[p] = e
 		}
 	}
-	_, _ = s.store.Replace(id, files, errs)
+	// Clone errs: Replace retains the passed map and later Apply calls mutate
+	// it, while firstErrors below still reads the local one.
+	info, _ := s.store.Replace(id, files, maps.Clone(errs))
 	s.saveSnapshot(id)
+	s.log().Info("index built",
+		"root", root,
+		"duration_ms", time.Since(start).Milliseconds(),
+		"files", info.Files,
+		"failed", info.Errors,
+		"mem_bytes", info.MemoryBytes,
+		"snapshot_bytes", s.snapshotSize(root),
+		"first_errors", firstErrors(errs, 3))
+}
+
+// snapshotSize returns the on-disk size of the repo snapshot, or -1 when it
+// does not exist yet.
+func (s *RepoService) snapshotSize(root string) int64 {
+	st, err := os.Stat(s.snapshotPath(root))
+	if err != nil {
+		return -1
+	}
+	return st.Size()
+}
+
+// firstErrors returns up to n path->error entries in stable (sorted) order.
+func firstErrors(errs map[string]string, n int) map[string]string {
+	if len(errs) == 0 {
+		return nil
+	}
+	paths := make([]string, 0, len(errs))
+	for p := range errs {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	out := make(map[string]string, min(n, len(paths)))
+	for _, p := range paths[:min(n, len(paths))] {
+		out[p] = errs[p]
+	}
+	return out
 }
 
 // saveSnapshot persists the current index state in the background when
