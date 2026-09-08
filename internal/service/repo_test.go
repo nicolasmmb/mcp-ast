@@ -521,7 +521,15 @@ func TestRepoServiceRestoreOnBoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitReady(t, svcs1, info.ID)
-	waitSnapshot(t, svcs1.Repo.snapshotPath(mustAbs(t, dir)))
+	snapPath := svcs1.Repo.snapshotPath(mustAbs(t, dir))
+	waitSnapshot(t, snapPath)
+	snapInfo, err := os.Stat(snapPath)
+	if err != nil {
+		t.Fatalf("snapshot file must exist on disk: %v", err)
+	}
+	if snapInfo.Size() == 0 {
+		t.Fatal("snapshot file must have non-zero size")
+	}
 	st1, err := svcs1.Repo.status(info.ID)
 	if err != nil {
 		t.Fatal(err)
