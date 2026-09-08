@@ -128,7 +128,7 @@ func TestRepoBuildLog(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for line == "" && time.Now().Before(deadline) {
 		for _, l := range strings.Split(buf.String(), "\n") {
-			if strings.Contains(l, "index built") {
+			if strings.Contains(l, "index build finished in") {
 				line = l
 			}
 		}
@@ -137,12 +137,15 @@ func TestRepoBuildLog(t *testing.T) {
 		}
 	}
 	if line == "" {
-		t.Fatalf("no 'index built' line in log output:\n%s", buf.String())
+		t.Fatalf("no 'index build finished' line in log output:\n%s", buf.String())
 	}
-	for _, want := range []string{"index built", "duration_ms=", "files=2", "failed=0", "mem_bytes=", "snapshot_bytes="} {
+	for _, want := range []string{"index build finished in", "2 files, 0 failures", "index in RAM", "snapshot", "on disk"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("log line missing %q: %s", want, line)
 		}
+	}
+	if strings.Contains(line, "first_errors") {
+		t.Fatalf("log line should omit first_errors when empty: %s", line)
 	}
 }
 

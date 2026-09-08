@@ -94,7 +94,12 @@ func main() {
 			log.Fatalf("registering language: %v", err)
 		}
 	}
-	logger.Info("started", "version", version, "tool_timeout", timeout.String(), "languages", reg.List(), "log", *logPath)
+	logDest := *logPath
+	if logDest == "" {
+		logDest = "stderr (no file)"
+	}
+	logger.Info(fmt.Sprintf("ast-mcp %s started: tool timeout %s, %d languages (%s), log at %s",
+		version, timeout.String(), len(reg.List()), strings.Join(reg.List(), ", "), logDest))
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "ast-mcp", Version: version}, nil)
 	svcs := service.NewWithStore(engine.New(reg), repoindex.NewMemory(memoryLimit))
@@ -111,7 +116,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("indexing -repo %s: %v", dir, err)
 		}
-		logger.Info("repo index started", "dir", dir, "state", info.State, "restored", info.Restored)
+		logger.Info(fmt.Sprintf("indexing started for %s (state: %s, restored: %t)", dir, info.State, info.Restored), "dir", dir)
 	}
 	tools.Register(server, svcs)
 
