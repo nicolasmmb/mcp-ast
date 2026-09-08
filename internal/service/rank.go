@@ -9,6 +9,7 @@ import (
 
 type RankResult struct {
 	Language string                    `json:"language"`
+	Source   string                    `json:"source,omitempty"` // "indexed" when served from the repo index
 	Entries  []engine.RankedComplexity `json:"entries"`
 	Errors   map[string]string         `json:"errors,omitempty"`
 }

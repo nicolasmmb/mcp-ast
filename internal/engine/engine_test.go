@@ -228,6 +228,44 @@ func TestUsagesNoMatch(t *testing.T) {
 	}
 }
 
+func TestIndexFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.go")
+	src := `package a
+
+func Foo(x int) int {
+	return x
+}
+
+func call() int { return Foo(1) }
+`
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg := lang.NewRegistry()
+	if err := reg.Register(golanglang.Go{}); err != nil {
+		t.Fatal(err)
+	}
+
+	index, err := New(reg).IndexFile(golanglang.Go{}, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if index.Language != "go" || len(index.Symbols["functions"]) != 2 || len(index.Complexity) != 2 {
+		t.Fatalf("index facts: %+v", index)
+	}
+	if index.Symbols["functions"][0].Text != "func Foo(x int) int {" {
+		t.Fatalf("symbols must use summaries: %+v", index.Symbols["functions"])
+	}
+	kinds := map[string]int{}
+	for _, usage := range index.Usages {
+		kinds[usage.Kind]++
+	}
+	if kinds["definition"] == 0 || kinds["call-site"] != 1 || kinds["reference"] == 0 {
+		t.Fatalf("usage classifications: %+v", index.Usages)
+	}
+}
+
 func TestComplexity(t *testing.T) {
 	dir := t.TempDir()
 	src := `package a

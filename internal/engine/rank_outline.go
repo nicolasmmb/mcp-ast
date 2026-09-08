@@ -77,6 +77,13 @@ func (e *Engine) Outline(l lang.Language, path string, includeText bool) ([]*Out
 	if err != nil {
 		return nil, err
 	}
+	return OutlineFromSymbols(syms), nil
+}
+
+// OutlineFromSymbols builds the hierarchical outline from symbols grouped by
+// kind, via range containment. It allows the repo index to serve outlines
+// without re-parsing.
+func OutlineFromSymbols(syms map[string][]Symbol) []*OutlineNode {
 	flat := make([]flatOutlineSymbol, 0)
 	for kind, items := range syms {
 		for _, sym := range items {
@@ -127,7 +134,7 @@ func (e *Engine) Outline(l lang.Language, path string, includeText bool) ([]*Out
 		}
 		stack = append(stack, n)
 	}
-	return roots, nil
+	return roots
 }
 
 func containsRange(outerStart, outerEnd, innerStart, innerEnd Point) bool {

@@ -20,6 +20,7 @@ type ScanQuery struct {
 // ScanResult groups symbols by file path, then kind.
 type ScanResult struct {
 	Language string                                `json:"language"`
+	Source   string                                `json:"source,omitempty"` // "indexed" when served from the repo index
 	Files    map[string]map[string][]engine.Symbol `json:"files"`
 	Errors   map[string]string                     `json:"errors,omitempty"`
 }

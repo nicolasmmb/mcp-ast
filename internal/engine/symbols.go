@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 
+	ts "github.com/tree-sitter/go-tree-sitter"
+
 	"mcp-ast/internal/lang"
 )
 
@@ -75,9 +77,14 @@ func (e *Engine) SymbolsText(l lang.Language, path string, fullText bool) (map[s
 		return nil, err
 	}
 	defer tree.Close()
+	return e.symbolsTree(l, src, tree.RootNode(), fullText)
+}
+
+// symbolsTree is SymbolsText over an already parsed tree.
+func (e *Engine) symbolsTree(l lang.Language, src []byte, root *ts.Node, fullText bool) (map[string][]Symbol, error) {
 	out := make(map[string][]Symbol)
 	for kind := range l.SymbolQueries() {
-		matches, err := e.runCompiledQuery(l, src, tree.RootNode(), lang.SymbolKey(kind), 0, fullText)
+		matches, err := e.runCompiledQuery(l, src, root, lang.SymbolKey(kind), 0, fullText)
 		if err != nil {
 			return nil, fmt.Errorf("symbol query %q: %w", kind, err)
 		}
