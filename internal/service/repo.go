@@ -115,13 +115,11 @@ func (s *RepoService) startWatch(id string, languages []string) {
 		ticker := time.NewTicker(s.watchInterval)
 		defer ticker.Stop()
 		for range ticker.C {
-			info, ok := s.store.Info(id)
-			if !ok {
+			if _, ok := s.store.Info(id); !ok {
 				return
 			}
 			langs, _ := s.watchLangs.Load(id)
 			names, _ := langs.([]string)
-			_ = info
 			_, _ = s.refresh(context.Background(), id, names)
 		}
 	}()
@@ -823,15 +821,6 @@ func (s *RepoService) definitions(id, name string, importsOnly bool, limit int) 
 	sortUsageMatches(matches)
 	if limit > 0 && len(matches) > limit {
 		matches = matches[:limit]
-	}
-	return matches, nil
-}
-
-// Usages queries indexed usages for a symbol.
-func (s *RepoService) usages(id, name string) ([]engine.UsageMatch, error) {
-	matches, ok := s.store.Usages(id, name)
-	if !ok {
-		return nil, fmt.Errorf("unknown repository %q", id)
 	}
 	return matches, nil
 }

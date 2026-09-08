@@ -107,7 +107,7 @@ func TestRepoServiceMemoryPartial(t *testing.T) {
 	if info.State != "partial" {
 		t.Fatalf("want partial state, got %q", info.State)
 	}
-	if _, err := svcs.Repo.usages(info.ID, "Helper"); err != nil {
+	if _, err := svcs.Repo.findUsages(info.ID, "Helper", FindQuery{Mode: FindOccurrences}); err != nil {
 		t.Fatalf("query on partial index should still succeed: %v", err)
 	}
 }
@@ -142,15 +142,15 @@ func TestRepoServiceRefreshIncremental(t *testing.T) {
 	if info.Version <= before {
 		t.Fatalf("refresh should bump version: before %d, after %d", before, info.Version)
 	}
-	if _, err := svcs.Repo.usages(info.ID, "Main2"); err != nil {
+	if _, err := svcs.Repo.findUsages(info.ID, "Main2", FindQuery{Mode: FindOccurrences}); err != nil {
 		t.Fatalf("usages after refresh: %v", err)
 	}
-	matches, _ := svcs.Repo.usages(info.ID, "Main2")
-	if len(matches) == 0 {
+	res, _ := svcs.Repo.findUsages(info.ID, "Main2", FindQuery{Mode: FindOccurrences})
+	if len(res.Matches) == 0 {
 		t.Fatal("Main2 should have usages after refresh")
 	}
-	if old, _ := svcs.Repo.usages(info.ID, "Main"); len(old) != 0 {
-		t.Fatalf("Main should be gone after rename: %d matches", len(old))
+	if old, _ := svcs.Repo.findUsages(info.ID, "Main", FindQuery{Mode: FindOccurrences}); len(old.Matches) != 0 {
+		t.Fatalf("Main should be gone after rename: %d matches", len(old.Matches))
 	}
 }
 
@@ -489,8 +489,8 @@ func TestRepoServiceRestoreOnBoot(t *testing.T) {
 	if !st2.Restored || st2.Files != 2 {
 		t.Fatalf("second boot must restore: %#v", st2)
 	}
-	usages, err := svcs2.Repo.usages(info2.ID, "Helper")
-	if err != nil || len(usages) < 4 {
+	usages, err := svcs2.Repo.findUsages(info2.ID, "Helper", FindQuery{Mode: FindOccurrences})
+	if err != nil || len(usages.Matches) < 4 {
 		t.Fatalf("restored index must answer queries: %#v %v", usages, err)
 	}
 
@@ -550,7 +550,7 @@ func TestRepoServiceRestoreStaleFile(t *testing.T) {
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if usages, _ := svcs2.Repo.usages(info2.ID, "Main2"); len(usages) > 0 {
+		if usages, _ := svcs2.Repo.findUsages(info2.ID, "Main2", FindQuery{Mode: FindOccurrences}); len(usages.Matches) > 0 {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -619,7 +619,7 @@ func TestRepoServiceUnknownID(t *testing.T) {
 	if _, err := svcs.Repo.status("nope"); err == nil {
 		t.Fatal("want error for unknown repo id")
 	}
-	if _, err := svcs.Repo.usages("nope", "x"); err == nil {
+	if _, err := svcs.Repo.findUsages("nope", "x", FindQuery{Mode: FindOccurrences}); err == nil {
 		t.Fatal("want error for unknown repo id on usages")
 	}
 }

@@ -176,7 +176,7 @@ func TestScaleMemoryPartial(t *testing.T) {
 		t.Fatalf("want partial with 1-byte budget, got %#v", info)
 	}
 	// usages must still answer (index data kept, state partial)
-	if _, err := svcs.Repo.usages(info.ID, "token"); err != nil {
+	if _, err := svcs.Repo.findUsages(info.ID, "token", FindQuery{Mode: FindOccurrences}); err != nil {
 		t.Fatalf("query after partial must work: %v", err)
 	}
 }

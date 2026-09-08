@@ -18,12 +18,12 @@ Nota S5: gate estrito confirmado — nomes antigos zerados de README/ARCHITECTUR
 **Validação:** `go test ./internal/service -run TestRepoServiceReindex -race`
 **Commit:** `fix(repo): drop previous index when a root is indexed again`
 
-### R2 — Deletar `usages` sem chamador — [PENDING]
+### R2 — Deletar `usages` sem chamador — [DONE]
 
-- [ ] R2.1 Deletar `usages` (repo.go).
-- [ ] R2.2 Migrar call sites: repo_test 110, 145; bench_test 179 → `findUsages(...).Matches`.
-- [ ] R2.3 `startWatch`: remover `_ = info` morto.
-- [ ] R2.4 Grep final de métodos órfãos (exceção registrada: `status`/`findUsages`).
+- [x] R2.1 Deletar `usages` (repo.go).
+- [x] R2.2 Migrar call sites: repo_test 110, 145, 153, 492, 553, 622; bench_test 179 → `findUsages(...).Matches` (7 sites, não 3 — o grep inicial subestimou).
+- [x] R2.3 `startWatch`: remover `_ = info` morto.
+- [x] R2.4 Grep final: `Repo.usages(` vazio em todo o repo.
 
 **Commit:** `refactor(repo): remove unused usages helper`
 
