@@ -27,12 +27,12 @@ Nota S5: gate estrito confirmado — nomes antigos zerados de README/ARCHITECTUR
 
 **Commit:** `refactor(repo): remove unused usages helper`
 
-### R3 — PR 13 descreve o modelo novo — [PENDING]
+### R3 — PR 13 descreve o modelo novo — [DONE]
 
-- [ ] R3.1 Corpo+título novos (breaking, 13 tools, flags, hashes, como testar).
-- [ ] R3.2 `gh pr edit 13`.
-- [ ] R3.3 Conferência: body sem `repo_id`/`index_repo`/`search_repo`/`17 tools`.
-- [ ] R3.4 Push do branch.
+- [x] R3.1 Corpo+título novos (breaking, 13 tools, flags, hashes, como testar).
+- [x] R3.2 Aplicado via `gh api PATCH` (REST) — `gh pr edit` falha por scope do token (sem `read:org`).
+- [x] R3.3 Conferência: nomes antigos só na seção Breaking (lista de remoções — intencional).
+- [x] R3.4 Push do branch (até `db6d049`).
 Branch: `feat/repo-mode`
 Regra: uma história por commit. Gate por história: "Pronto quando" + validação + `go test ./...`, `go vet ./...`, `git diff --check` verdes.
 
