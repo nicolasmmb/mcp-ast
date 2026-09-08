@@ -93,6 +93,7 @@ func (s *RepoService) Index(ctx context.Context, dir string, languages []string)
 		return repoindex.Info{}, err
 	}
 	if old, ok := s.roots.Load(root); ok {
+		s.log().Info("old index dropped", "root", root)
 		_ = s.drop(old.(string))
 	}
 	info := s.store.Create(root)
@@ -101,17 +102,30 @@ func (s *RepoService) Index(ctx context.Context, dir string, languages []string)
 	langsKey := strings.Join(languages, ",")
 	s.snapshotLangs.Store(info.ID, languages)
 	if s.toolVersion != "" {
-		if snap, err := repoindex.LoadSnapshot(path); err == nil &&
-			snap.Header.Valid(repoindex.SnapshotSchemaVersion, s.toolVersion, root, langsKey) {
-			if _, err := s.store.Replace(info.ID, snap.Files, nil); err == nil {
-				info, _ = s.store.SetCache(info.ID, true, path)
-				if s.watchInterval > 0 {
-					_, _ = s.store.SetWatch(info.ID, true)
-					s.startWatch(info.ID, languages)
-				}
-				go func() { _, _ = s.refresh(context.Background(), info.ID, languages) }()
-				return info, nil
+		start := time.Now()
+		if snap, err := repoindex.LoadSnapshot(path); err != nil {
+			if os.IsNotExist(err) {
+				s.log().Debug("no snapshot yet, full build", "root", root)
+			} else {
+				s.log().Info("snapshot unusable, full rebuild", "root", root, "reason", err)
 			}
+		} else if !snap.Header.Valid(repoindex.SnapshotSchemaVersion, s.toolVersion, root, langsKey) {
+			s.log().Info("snapshot unusable, full rebuild", "root", root, "reason", "header mismatch")
+		} else if _, err := s.store.Replace(info.ID, snap.Files, nil); err != nil {
+			s.log().Info("snapshot unusable, full rebuild", "root", root, "reason", err)
+		} else {
+			info, _ = s.store.SetCache(info.ID, true, path)
+			if s.watchInterval > 0 {
+				_, _ = s.store.SetWatch(info.ID, true)
+				s.startWatch(info.ID, languages)
+			}
+			s.log().Info("index restored",
+				"root", root,
+				"duration_ms", time.Since(start).Milliseconds(),
+				"files", len(snap.Files),
+				"snapshot_bytes", s.snapshotSize(root))
+			go func() { _, _ = s.refresh(context.Background(), info.ID, languages) }()
+			return info, nil
 		}
 	}
 	go s.build(context.WithoutCancel(ctx), info.ID, root, filters)
@@ -401,7 +415,9 @@ func (s *RepoService) saveSnapshot(id string) {
 	}
 	s.snapshotMu.Lock()
 	defer s.snapshotMu.Unlock()
-	_ = repoindex.SaveSnapshot(s.snapshotPath(info.Root), snap)
+	if err := repoindex.SaveSnapshot(s.snapshotPath(info.Root), snap); err != nil {
+		s.log().Warn("snapshot save failed", "root", info.Root, "error", err)
+	}
 }
 
 // loadIndexed attaches size, mtime and sha256 to a file's facts. Unreadable
