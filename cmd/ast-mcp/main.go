@@ -30,7 +30,19 @@ import (
 )
 
 // version is injected at build time with -ldflags "-X main.version=vX.Y.Z".
-var version = "dev"
+// commit is the short git hash, injected with "-X main.commit=$(git rev-parse --short HEAD)".
+var (
+	version = "dev"
+	commit  = ""
+)
+
+// displayVersion returns the version string with commit hash when available.
+func displayVersion() string {
+	if commit != "" {
+		return version + "-" + commit
+	}
+	return version
+}
 
 // stringList accumulates a repeatable flag value.
 type stringList []string
@@ -58,8 +70,8 @@ func validateRepoDirs(dirs []string) error {
 
 func main() {
 	timeout := flag.Duration("tool-timeout", 30*time.Second, "per-tool-call timeout (0 disables)")
-	verbose := flag.Bool("verbose", false, "log debug output to stderr")
-	logPath := flag.String("log", "", "write log to file (append)")
+	verbose := flag.Bool("verbose", false, "also log debug output to stderr (info always goes to stderr)")
+	logPath := flag.String("log", "", "append logs to file (in addition to stderr)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	maxMemory := flag.String("max-memory", "auto", "repository index memory limit in MB, or auto")
 	var repoDirs stringList
@@ -70,7 +82,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("ast-mcp %s\n", version)
+		fmt.Printf("ast-mcp %s\n", displayVersion())
 		return
 	}
 	if err := validateRepoDirs(repoDirs); err != nil {
@@ -87,6 +99,7 @@ func main() {
 		defer closeLog()
 	}
 	tools.SetLogger(logger)
+	logger.Debug(fmt.Sprintf("os.Args: %v", os.Args))
 
 	reg := lang.NewRegistry()
 	for _, l := range []lang.Language{java.Java{}, python.Python{}, golanglang.Go{}, bash.Bash{}, csharp.CSharp{}, javascript.JavaScript{}, rust.Rust{}, typescript.TypeScript{}, yaml.YAML{}} {
@@ -94,11 +107,17 @@ func main() {
 			log.Fatalf("registering language: %v", err)
 		}
 	}
-	logger.Info("started", "version", version, "tool_timeout", timeout.String(), "languages", reg.List(), "log", *logPath)
+	logDest := *logPath
+	if logDest == "" {
+		logDest = "stderr (no file)"
+	}
+	logger.Info(fmt.Sprintf("ast-mcp %s started: tool timeout %s, %d languages (%s), log at %s",
+		displayVersion(), timeout.String(), len(reg.List()), strings.Join(reg.List(), ", "), logDest))
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "ast-mcp", Version: version}, nil)
 	svcs := service.NewWithStore(engine.New(reg), repoindex.NewMemory(memoryLimit))
 	svcs.Repo.SetToolVersion(version)
+	svcs.Repo.SetLogger(logger)
 	if *cacheDir != "" {
 		svcs.Repo.SetCacheDir(*cacheDir)
 	}
@@ -110,7 +129,16 @@ func main() {
 		if err != nil {
 			log.Fatalf("indexing -repo %s: %v", dir, err)
 		}
-		logger.Info("repo indexed", "dir", dir, "state", info.State, "restored", info.Restored)
+		if info.State == "ready" && info.Restored {
+			logger.Info(fmt.Sprintf("index ready for %s (restored: %d %s, %s RAM)", dir, info.Files, plural(info.Files, "file", "files"), formatBytes(info.MemoryBytes)), "dir", dir)
+		} else if info.State == "building" {
+			logger.Warn(fmt.Sprintf("index building for %s — queries use disk until ready (check index_status)", dir), "dir", dir)
+		} else {
+			logger.Info(fmt.Sprintf("index %s for %s (%d %s)", info.State, dir, info.Files, plural(info.Files, "file", "files")), "dir", dir)
+		}
+	}
+	if len(repoDirs) == 0 {
+		logger.Warn("no -repo configured: server running fully on disk, no index will be built or loaded")
 	}
 	tools.Register(server, svcs)
 
@@ -119,30 +147,51 @@ func main() {
 	}
 }
 
-// newLogger builds a slog logger: -verbose enables debug level on stderr,
-// -log appends to a file. Neither flag leaves logging disabled.
+// newLogger builds a slog logger: Info (Debug with -verbose) always goes to
+// stderr so the MCP debug console shows it; -log additionally appends to a
+// file (and routes std log there too).
 func newLogger(verbose bool, logPath string) (*slog.Logger, func()) {
 	level := slog.LevelInfo
 	if verbose {
 		level = slog.LevelDebug
 	}
-	var w io.Writer = io.Discard
-	if verbose {
-		w = os.Stderr
-	}
+	var w io.Writer = os.Stderr
 	var closeLog func()
 	if logPath != "" {
 		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: cannot open log file %s: %v\n", logPath, err)
 		} else {
-			if w == os.Stderr {
-				w = io.MultiWriter(os.Stderr, f)
-			} else {
-				w = f
-			}
+			w = io.MultiWriter(os.Stderr, f)
 			closeLog = func() { f.Close() }
+			log.SetOutput(io.MultiWriter(os.Stderr, f))
 		}
 	}
 	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: level})), closeLog
+}
+
+// formatBytes formats a byte count for log messages ("794 B", "14.2 MB").
+func formatBytes(n int64) string {
+	if n < 0 {
+		return "missing"
+	}
+	if n < 1024 {
+		return fmt.Sprintf("%d B", n)
+	}
+	f := float64(n)
+	for _, u := range []string{"KB", "MB", "GB"} {
+		f /= 1024
+		if f < 1024 {
+			return fmt.Sprintf("%.1f %s", f, u)
+		}
+	}
+	return fmt.Sprintf("%.1f TB", f/1024)
+}
+
+// plural picks the singular or plural noun for log messages.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }

@@ -1,3 +1,4 @@
 opencode.json
 **/.*code**
 /ast-mcp
+internal/service/java_memory_diag_test.go

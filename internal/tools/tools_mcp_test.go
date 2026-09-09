@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -48,9 +49,14 @@ func buildServer(t *testing.T) string {
 
 func mcpSession(t *testing.T, bin string, afterInit []string) []map[string]any {
 	t.Helper()
+	return mcpSessionWithArgs(t, bin, nil, afterInit)
+}
+
+func mcpSessionWithArgs(t *testing.T, bin string, args []string, afterInit []string) []map[string]any {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin)
+	cmd := exec.CommandContext(ctx, bin, args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -171,5 +177,118 @@ func TestMCP_ListLanguages_Call(t *testing.T) {
 	}
 	if !strings.Contains(s, "elapsed_ms") {
 		t.Fatalf("expected elapsed_ms: %s", s)
+	}
+}
+
+func TestMCP_IndexStatus_WithRepo(t *testing.T) {
+	bin := buildServer(t)
+	dir := t.TempDir()
+	goFile := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(goFile, []byte("package main\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resps := mcpSessionWithArgs(t, bin, []string{"-repo", dir}, []string{
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"index_status","arguments":{}}}`,
+	})
+	var call map[string]any
+	for _, r := range resps {
+		if r["id"] == float64(2) {
+			call = r
+			break
+		}
+	}
+	if call == nil {
+		t.Fatalf("no index_status response: %#v", resps)
+	}
+	raw, _ := json.Marshal(call)
+	s := string(raw)
+	if !strings.Contains(s, `"state":"ready"`) {
+		t.Fatalf("expected state=ready: %s", s)
+	}
+	if !strings.Contains(s, `"files_indexed":1`) {
+		t.Fatalf("expected files_indexed=1: %s", s)
+	}
+	if !strings.Contains(s, `"watch":true`) {
+		t.Fatalf("expected watch=true: %s", s)
+	}
+}
+
+func TestMCP_IndexedTools_HaveElapsedMsAndSource(t *testing.T) {
+	bin := buildServer(t)
+	dir := t.TempDir()
+	src := `package app
+
+import "fmt"
+
+func Main() { _ = Helper() }
+func Helper() int { return 1 }
+func Unused() int { return 42 }
+func call() int { fmt.Println("ok"); return Helper() }
+`
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Start server with -repo, wait for index, then test via single tool call
+	// The index builds fast for a 1-file repo, so we poll index_status
+	resps := mcpSessionWithArgs(t, bin, []string{"-repo", dir}, []string{
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"index_status","arguments":{}}}`,
+	})
+	var indexResp map[string]any
+	for _, r := range resps {
+		if r["id"] == float64(2) {
+			indexResp = r
+			break
+		}
+	}
+	if indexResp == nil {
+		t.Fatal("no index_status response")
+	}
+	raw, _ := json.Marshal(indexResp)
+	if !strings.Contains(string(raw), `"state":"ready"`) {
+		t.Fatalf("index not ready: %s", string(raw))
+	}
+
+	// Now test each tool via separate sessions (index is cached, restore is instant)
+	tools := []struct {
+		name string
+		args string
+	}{
+		{"find_usages", `{"mode":"occurrences","name":"Helper","path":"` + dir + `"}`},
+		{"scan_symbols", `{"path":"` + dir + `"}`},
+		{"outline_file", `{"path":"` + dir + `/main.go` + `"}`},
+		{"analyze_file", `{"path":"` + dir + `/main.go` + `"}`},
+	}
+	for _, tool := range tools {
+		t.Run(tool.name, func(t *testing.T) {
+			resps := mcpSessionWithArgs(t, bin, []string{"-repo", dir}, []string{
+				fmt.Sprintf(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"%s","arguments":%s}}`, tool.name, tool.args),
+			})
+			var resp map[string]any
+			for _, r := range resps {
+				if r["id"] == float64(2) {
+					resp = r
+					break
+				}
+			}
+			if resp == nil {
+				t.Fatalf("no response for %s", tool.name)
+			}
+			raw, _ := json.Marshal(resp)
+			s := string(raw)
+			if !strings.Contains(s, "elapsed_ms") {
+				t.Errorf("%s: missing elapsed_ms: %s", tool.name, s)
+			}
+			// find_usages, scan_symbols, outline_file use index; analyze_file always re-parses (ast_fallback)
+			if tool.name == "analyze_file" {
+				if !strings.Contains(s, `"source":"ast_fallback"`) {
+					t.Errorf("%s: expected source=ast_fallback: %s", tool.name, s)
+				}
+			} else {
+				if !strings.Contains(s, `"source":"indexed"`) {
+					t.Errorf("%s: expected source=indexed: %s", tool.name, s)
+				}
+			}
+		})
 	}
 }

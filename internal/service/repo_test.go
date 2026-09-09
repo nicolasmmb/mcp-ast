@@ -1,12 +1,15 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -89,6 +92,114 @@ func TestRepoServiceIndexAndQuery(t *testing.T) {
 	}
 	if len(ranked) == 0 || ranked[0].Complexity != ranked[0].Complexity {
 		t.Fatalf("unexpected complexity: %#v", ranked)
+	}
+}
+
+// logBuf is a concurrency-safe buffer: index logs are written from the
+// build goroutine while the test polls the contents.
+type logBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *logBuf) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *logBuf) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+func (l *logBuf) Reset() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.b.Reset()
+}
+
+func TestRepoBuildLog(t *testing.T) {
+	buf := &logBuf{}
+	svcs := testRepoServices(t, 1<<30)
+	svcs.Repo.SetLogger(slog.New(slog.NewTextHandler(buf, nil)))
+	dir, _, _ := writeFixture(t)
+	info, err := svcs.Repo.Index(context.Background(), dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitReady(t, svcs, info.ID)
+	line := ""
+	deadline := time.Now().Add(2 * time.Second)
+	for line == "" && time.Now().Before(deadline) {
+		for _, l := range strings.Split(buf.String(), "\n") {
+			if strings.Contains(l, "index build finished in") {
+				line = l
+			}
+		}
+		if line == "" {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if line == "" {
+		t.Fatalf("no 'index build finished' line in log output:\n%s", buf.String())
+	}
+	for _, want := range []string{"index build finished in", "2 files, 0 failures", "index in RAM", "snapshot", "on disk"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("log line missing %q: %s", want, line)
+		}
+	}
+	if strings.Contains(line, "first_errors") {
+		t.Fatalf("log line should omit first_errors when empty: %s", line)
+	}
+}
+
+func TestRepoRestoreAndInvalidationLogs(t *testing.T) {
+	cacheDir := t.TempDir()
+	dir, _, _ := writeFixture(t)
+	buf := &logBuf{}
+
+	// Boot 1: build + save snapshot
+	svcs1 := testRepoServices(t, 1<<30)
+	svcs1.Repo.SetToolVersion("log-v1")
+	svcs1.Repo.SetCacheDir(cacheDir)
+	svcs1.Repo.SetLogger(slog.New(slog.NewTextHandler(buf, nil)))
+	info1, _ := svcs1.Repo.Index(context.Background(), dir, nil)
+	waitReady(t, svcs1, info1.ID)
+	waitSnapshot(t, svcs1.Repo.snapshotPath(mustAbs(t, dir)))
+
+	if !strings.Contains(buf.String(), "index build finished in") {
+		t.Fatal("boot 1: missing 'index build finished' log")
+	}
+
+	// Boot 2: restore from snapshot
+	buf.Reset()
+	svcs2 := testRepoServices(t, 1<<30)
+	svcs2.Repo.SetToolVersion("log-v1")
+	svcs2.Repo.SetCacheDir(cacheDir)
+	svcs2.Repo.SetLogger(slog.New(slog.NewTextHandler(buf, nil)))
+	info2, _ := svcs2.Repo.Index(context.Background(), dir, nil)
+	waitReady(t, svcs2, info2.ID)
+
+	if !strings.Contains(buf.String(), "index restored from snapshot in") {
+		t.Fatalf("boot 2: missing 'index restored' log:\n%s", buf.String())
+	}
+
+	// Boot 3: different version → snapshot expired
+	buf.Reset()
+	svcs3 := testRepoServices(t, 1<<30)
+	svcs3.Repo.SetToolVersion("log-v2")
+	svcs3.Repo.SetCacheDir(cacheDir)
+	svcs3.Repo.SetLogger(slog.New(slog.NewTextHandler(buf, nil)))
+	info3, _ := svcs3.Repo.Index(context.Background(), dir, nil)
+	waitReady(t, svcs3, info3.ID)
+
+	if !strings.Contains(buf.String(), "snapshot expired") {
+		t.Fatalf("boot 3: missing 'snapshot expired' log:\n%s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "index build finished in") {
+		t.Fatalf("boot 3: missing 'index build finished' after invalidation:\n%s", buf.String())
 	}
 }
 
@@ -464,7 +575,15 @@ func TestRepoServiceRestoreOnBoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitReady(t, svcs1, info.ID)
-	waitSnapshot(t, svcs1.Repo.snapshotPath(mustAbs(t, dir)))
+	snapPath := svcs1.Repo.snapshotPath(mustAbs(t, dir))
+	waitSnapshot(t, snapPath)
+	snapInfo, err := os.Stat(snapPath)
+	if err != nil {
+		t.Fatalf("snapshot file must exist on disk: %v", err)
+	}
+	if snapInfo.Size() == 0 {
+		t.Fatal("snapshot file must have non-zero size")
+	}
 	st1, err := svcs1.Repo.status(info.ID)
 	if err != nil {
 		t.Fatal(err)

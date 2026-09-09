@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"reflect"
 	"time"
@@ -22,6 +23,14 @@ var logger = slog.New(slog.DiscardHandler)
 
 // SetLogger configures the logger used to report tool calls.
 func SetLogger(l *slog.Logger) { logger = l }
+
+// humanDur formats a duration for tool-call log messages ("42ms", "15.5s").
+func humanDur(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	return fmt.Sprintf("%.1fs", d.Seconds())
+}
 
 // Timed is embedded in every tool output so all responses carry the
 // processing time of the query.
@@ -47,7 +56,8 @@ func timed[In any, Out TimedOutput](h func(context.Context, *mcp.CallToolRequest
 		}
 		start := time.Now()
 		res, out, err := h(ctx, req, in)
-		ms := float64(time.Since(start).Microseconds()) / 1000
+		elapsed := time.Since(start)
+		ms := float64(elapsed.Microseconds()) / 1000
 		if v := reflect.ValueOf(out); v.Kind() == reflect.Pointer && !v.IsNil() {
 			out.SetElapsedMS(ms)
 		}
@@ -56,9 +66,9 @@ func timed[In any, Out TimedOutput](h func(context.Context, *mcp.CallToolRequest
 			name = req.Params.Name
 		}
 		if err != nil {
-			logger.Error("tool", "tool", name, "elapsed_ms", ms, "error", err)
+			logger.Error(fmt.Sprintf("tool %s failed in %s: %s (%+v)", name, humanDur(elapsed), err, in), "tool", name)
 		} else {
-			logger.Info("tool", "tool", name, "elapsed_ms", ms)
+			logger.Info(fmt.Sprintf("tool %s finished in %s (%+v)", name, humanDur(elapsed), in), "tool", name)
 		}
 		return res, out, err
 	}

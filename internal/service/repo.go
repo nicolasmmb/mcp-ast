@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -24,6 +26,7 @@ var errUnstable = errors.New("file changed while being indexed")
 type RepoService struct {
 	eng           *engine.Engine
 	store         repoindex.Store
+	logger        *slog.Logger
 	roots         sync.Map // abs root -> repo id (index-first path resolution)
 	refreshLocks  sync.Map // repo id -> *sync.Mutex (refresh coalescing)
 	watchLangs    sync.Map // repo id -> languages used at index time
@@ -32,6 +35,18 @@ type RepoService struct {
 	toolVersion   string
 	cacheDir      string
 	snapshotMu    sync.Mutex
+}
+
+// SetLogger routes index operation logs to the server logger (stderr/-log file).
+func (s *RepoService) SetLogger(l *slog.Logger) { s.logger = l }
+
+// log returns the service logger, falling back to the slog default for
+// direct constructions (tests).
+func (s *RepoService) log() *slog.Logger {
+	if s.logger != nil {
+		return s.logger
+	}
+	return slog.Default()
 }
 
 // SetToolVersion enables snapshot persistence: snapshots are only saved and
@@ -78,6 +93,7 @@ func (s *RepoService) Index(ctx context.Context, dir string, languages []string)
 		return repoindex.Info{}, err
 	}
 	if old, ok := s.roots.Load(root); ok {
+		s.log().Info(fmt.Sprintf("replaced previous index for %s", root), "root", root)
 		_ = s.drop(old.(string))
 	}
 	info := s.store.Create(root)
@@ -86,17 +102,28 @@ func (s *RepoService) Index(ctx context.Context, dir string, languages []string)
 	langsKey := strings.Join(languages, ",")
 	s.snapshotLangs.Store(info.ID, languages)
 	if s.toolVersion != "" {
-		if snap, err := repoindex.LoadSnapshot(path); err == nil &&
-			snap.Header.Valid(repoindex.SnapshotSchemaVersion, s.toolVersion, root, langsKey) {
-			if _, err := s.store.Replace(info.ID, snap.Files, nil); err == nil {
-				info, _ = s.store.SetCache(info.ID, true, path)
-				if s.watchInterval > 0 {
-					_, _ = s.store.SetWatch(info.ID, true)
-					s.startWatch(info.ID, languages)
-				}
-				go func() { _, _ = s.refresh(context.Background(), info.ID, languages) }()
-				return info, nil
+		start := time.Now()
+		if snap, err := repoindex.LoadSnapshot(path); err != nil {
+			if os.IsNotExist(err) {
+				s.log().Debug(fmt.Sprintf("no snapshot for %s: full index build", root), "root", root)
+			} else {
+				s.log().Warn(fmt.Sprintf("snapshot corrupt, full index build (reason: %s)", err), "root", root)
 			}
+		} else if !snap.Header.Valid(repoindex.SnapshotSchemaVersion, s.toolVersion, root, langsKey) {
+			s.log().Warn("snapshot expired, full index build (reason: header mismatch — schema, version, root or languages changed)", "root", root)
+		} else if _, err := s.store.Replace(info.ID, snap.Files, nil); err != nil {
+			s.log().Warn(fmt.Sprintf("snapshot corrupt, full index build (reason: %s)", err), "root", root)
+		} else {
+			info, _ = s.store.SetCache(info.ID, true, path)
+			if s.watchInterval > 0 {
+				_, _ = s.store.SetWatch(info.ID, true)
+				s.startWatch(info.ID, languages)
+			}
+			s.log().Info(fmt.Sprintf("index restored from snapshot in %s: %d %s; snapshot %s",
+				humanDur(time.Since(start)), len(snap.Files), plural(len(snap.Files), "file", "files"), humanBytes(s.snapshotSize(root))),
+				"root", root)
+			go func() { _, _ = s.refresh(context.Background(), info.ID, languages) }()
+			return info, nil
 		}
 	}
 	go s.build(context.WithoutCancel(ctx), info.ID, root, filters)
@@ -298,12 +325,14 @@ func (s *RepoService) status(id string) (repoindex.Info, error) {
 
 // build indexes every recognized file under root and replaces the snapshot.
 func (s *RepoService) build(ctx context.Context, id, root string, filters []lang.Language) {
+	start := time.Now()
 	files := make(map[string]repoindex.IndexedFile)
 	errs := make(map[string]string)
 	for _, f := range filters {
 		facts, fileErrs, err := s.eng.IndexDir(ctx, root, f)
 		if err != nil {
 			errs[root] = err.Error()
+			s.log().Warn(fmt.Sprintf("failed to scan directory: %s", err), "root", root)
 			break
 		}
 		for p, fact := range facts {
@@ -316,8 +345,85 @@ func (s *RepoService) build(ctx context.Context, id, root string, filters []lang
 			errs[p] = e
 		}
 	}
-	_, _ = s.store.Replace(id, files, errs)
+	// Clone errs: Replace retains the passed map and later Apply calls mutate
+	// it, while firstErrors below still reads the local one.
+	info, _ := s.store.Replace(id, files, maps.Clone(errs))
 	s.saveSnapshot(id)
+	args := []any{"root", root}
+	if len(errs) > 0 {
+		args = append(args, "first_errors", firstErrors(errs, 3))
+	}
+	s.log().Info(fmt.Sprintf("index build finished in %s: %d %s, %d %s; %s index in RAM; %s snapshot on disk",
+		humanDur(time.Since(start)),
+		info.Files, plural(info.Files, "file", "files"),
+		info.Errors, plural(info.Errors, "failure", "failures"),
+		humanBytes(info.MemoryBytes), humanBytes(s.snapshotSize(root))),
+		args...)
+}
+
+// snapshotSize returns the on-disk size of the repo snapshot, or -1 when it
+// does not exist yet.
+func (s *RepoService) snapshotSize(root string) int64 {
+	st, err := os.Stat(s.snapshotPath(root))
+	if err != nil {
+		return -1
+	}
+	return st.Size()
+}
+
+// plural picks the singular or plural noun for log messages.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
+// humanDur formats a duration for log messages ("45ms", "1.4s", "2m3s").
+func humanDur(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	return d.Round(time.Second).String()
+}
+
+// humanBytes formats a byte count for log messages ("794 B", "14.2 MB");
+// negative means absent ("missing").
+func humanBytes(n int64) string {
+	if n < 0 {
+		return "missing"
+	}
+	if n < 1024 {
+		return fmt.Sprintf("%d B", n)
+	}
+	f := float64(n)
+	for _, u := range []string{"KB", "MB", "GB"} {
+		f /= 1024
+		if f < 1024 {
+			return fmt.Sprintf("%.1f %s", f, u)
+		}
+	}
+	return fmt.Sprintf("%.1f TB", f/1024)
+}
+
+// firstErrors returns up to n path->error entries in stable (sorted) order.
+func firstErrors(errs map[string]string, n int) map[string]string {
+	if len(errs) == 0 {
+		return nil
+	}
+	paths := make([]string, 0, len(errs))
+	for p := range errs {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	out := make(map[string]string, min(n, len(paths)))
+	for _, p := range paths[:min(n, len(paths))] {
+		out[p] = errs[p]
+	}
+	return out
 }
 
 // saveSnapshot persists the current index state in the background when
@@ -347,7 +453,9 @@ func (s *RepoService) saveSnapshot(id string) {
 	}
 	s.snapshotMu.Lock()
 	defer s.snapshotMu.Unlock()
-	_ = repoindex.SaveSnapshot(s.snapshotPath(info.Root), snap)
+	if err := repoindex.SaveSnapshot(s.snapshotPath(info.Root), snap); err != nil {
+		s.log().Warn(fmt.Sprintf("failed to save snapshot: %s", err), "root", info.Root)
+	}
 }
 
 // loadIndexed attaches size, mtime and sha256 to a file's facts. Unreadable
@@ -387,6 +495,7 @@ func (s *RepoService) refresh(ctx context.Context, id string, languages []string
 		return info, nil
 	}
 	defer lock.Unlock()
+	start := time.Now()
 	filters, err := filters(s.eng, languages, info.Root)
 	if err != nil {
 		return repoindex.Info{}, err
@@ -401,6 +510,9 @@ func (s *RepoService) refresh(ctx context.Context, id string, languages []string
 	}
 	threshold := maxInt(500, len(meta)/5)
 	if len(added)+len(changed)+len(deleted) > threshold {
+		s.log().Info(fmt.Sprintf("delta of %d files exceeded the limit of %d: full index build",
+			len(added)+len(changed)+len(deleted), threshold),
+			"root", info.Root)
 		info, err = s.store.SetState(id, "refreshing")
 		if err != nil {
 			return repoindex.Info{}, err
@@ -446,6 +558,12 @@ func (s *RepoService) refresh(ctx context.Context, id string, languages []string
 		return repoindex.Info{}, err
 	}
 	s.saveSnapshot(id)
+	s.log().Info(fmt.Sprintf("incremental refresh in %s: +%d added, %d updated, %d removed; %d %s total, %d %s",
+		humanDur(time.Since(start)),
+		len(cs.Added), len(cs.Updated), len(cs.Deleted),
+		info.Files, plural(info.Files, "file", "files"),
+		info.Errors, plural(info.Errors, "failure", "failures")),
+		"root", info.Root)
 	return info, nil
 }
 
