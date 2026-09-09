@@ -294,6 +294,190 @@ func resolveLocalImportFromRepo(fromPath string, r *repo, spec string) (string, 
 	return "", false
 }
 
+// applyCallGraphDelta updates the call graph incrementally for a changeset:
+// removes edges from deleted/updated files, adds edges from added/updated files.
+func (r *repo) applyCallGraphDelta(changes ChangeSet) {
+	// Build declCount from current state (post-insert).
+	declCount := map[string]int{}
+	for _, f := range r.files {
+		for kind, syms := range f.Facts.Symbols {
+			if kind == "imports" {
+				continue
+			}
+			for _, s := range syms {
+				if name := strings.TrimSpace(s.Name); name != "" {
+					declCount[name]++
+				}
+			}
+		}
+	}
+	resolution := func(callee string) string {
+		switch declCount[callee] {
+		case 1:
+			return "exact"
+		case 0:
+			return "unresolved"
+		default:
+			return "candidate"
+		}
+	}
+
+	// Collect affected paths.
+	affected := make(map[string]bool, len(changes.Deleted)+len(changes.Updated)+len(changes.Added))
+	for _, p := range changes.Deleted {
+		affected[p] = true
+	}
+	for p := range changes.Updated {
+		affected[p] = true
+	}
+	for p := range changes.Added {
+		affected[p] = true
+	}
+
+	// Remove old edges for affected paths.
+	for caller, edges := range r.calls.ByCaller {
+		n := 0
+		for _, e := range edges {
+			if !affected[e.File] {
+				edges[n] = e
+				n++
+			}
+		}
+		if n == 0 {
+			delete(r.calls.ByCaller, caller)
+		} else {
+			r.calls.ByCaller[caller] = edges[:n]
+		}
+	}
+	for callee, edges := range r.calls.ByCallee {
+		n := 0
+		for _, e := range edges {
+			if !affected[e.File] {
+				edges[n] = e
+				n++
+			}
+		}
+		if n == 0 {
+			delete(r.calls.ByCallee, callee)
+		} else {
+			r.calls.ByCallee[callee] = edges[:n]
+		}
+	}
+
+	// Add new edges for added/updated files.
+	for p := range affected {
+		fid, ok := r.fileIDs[p]
+		if !ok {
+			continue
+		}
+		f, ok := r.files[fid]
+		if !ok {
+			continue
+		}
+		for nameID, byFile := range r.usages {
+			calleeName := r.nameOf(nameID)
+			refs, ok := byFile[fid]
+			if !ok {
+				continue
+			}
+			_ = f // used for path only
+			for _, ref := range refs {
+				if ref.Kind != kindCallSite {
+					continue
+				}
+				callerName := r.nameOf(ref.Caller)
+				if callerName == "" || calleeName == "" {
+					continue
+				}
+				e := CallEdge{File: p, Caller: callerName, Callee: calleeName, Resolution: resolution(calleeName)}
+				r.calls.ByCaller[callerName] = append(r.calls.ByCaller[callerName], e)
+				r.calls.ByCallee[calleeName] = append(r.calls.ByCallee[calleeName], e)
+			}
+		}
+	}
+
+	// Re-sort affected caller/callee lists.
+	for _, edges := range r.calls.ByCaller {
+		if len(edges) > 0 {
+			sortEdges(edges)
+		}
+	}
+	for _, edges := range r.calls.ByCallee {
+		if len(edges) > 0 {
+			sortEdges(edges)
+		}
+	}
+}
+
+// applyImportGraphDelta updates the import graph incrementally for a changeset.
+func (r *repo) applyImportGraphDelta(changes ChangeSet) {
+	affected := make(map[string]bool, len(changes.Deleted)+len(changes.Updated)+len(changes.Added))
+	for _, p := range changes.Deleted {
+		affected[p] = true
+	}
+	for p := range changes.Updated {
+		affected[p] = true
+	}
+	for p := range changes.Added {
+		affected[p] = true
+	}
+
+	// Remove old edges for affected paths.
+	for path := range r.imports.ByFile {
+		if !affected[path] {
+			continue
+		}
+		delete(r.imports.ByFile, path)
+	}
+	for spec, edges := range r.imports.BySpec {
+		n := 0
+		for _, e := range edges {
+			if !affected[e.File] {
+				edges[n] = e
+				n++
+			}
+		}
+		if n == 0 {
+			delete(r.imports.BySpec, spec)
+		} else {
+			r.imports.BySpec[spec] = edges[:n]
+		}
+	}
+
+	// Add new edges for added/updated files.
+	for p := range affected {
+		fid, ok := r.fileIDs[p]
+		if !ok {
+			continue
+		}
+		f, ok := r.files[fid]
+		if !ok {
+			continue
+		}
+		seen := map[string]bool{}
+		for kind, syms := range f.Facts.Symbols {
+			if kind != "imports" {
+				continue
+			}
+			for _, sym := range syms {
+				spec := importSpecifier(sym.Text)
+				if spec == "" || seen[p+"|"+spec] {
+					continue
+				}
+				seen[p+"|"+spec] = true
+				edge := ImportEdge{File: p, Specifier: spec}
+				r.imports.ByFile[p] = append(r.imports.ByFile[p], edge)
+				r.imports.BySpec[spec] = append(r.imports.BySpec[spec], edge)
+				if target, ok := resolveLocalImportFromRepo(p, r, spec); ok {
+					edgeResolved := ImportEdge{File: p, Specifier: spec, Resolved: target}
+					r.imports.ByFile[p] = append(r.imports.ByFile[p], edgeResolved)
+					r.imports.BySpec[target] = append(r.imports.BySpec[target], edgeResolved)
+				}
+			}
+		}
+	}
+}
+
 // ResolutionCounts returns the edge count per resolution kind.
 func (g *CallGraph) ResolutionCounts() map[string]int {
 	out := map[string]int{}

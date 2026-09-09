@@ -339,12 +339,17 @@ func (s *MemoryStore) Apply(id string, changes ChangeSet) (Info, error) {
 		}
 		r.errors[p] = e
 	}
-	// ponytail: full graph rebuild per Apply; incremental graph surgery if
-	// refresh on 50k-file repos measures this as a hotspot.
+	// ponytail: incremental graph surgery for adds/updates; full rebuild
+	// when deletes change declCount affecting resolution of all edges.
 	sort.Slice(r.complexity, func(i, j int) bool { return cmpComplexity(r.complexity[i], r.complexity[j]) })
 	r.enrich()
-	r.calls = buildCallGraphFromRepo(r)
-	r.imports = buildImportGraphFromRepo(r)
+	if len(changes.Deleted) > 0 {
+		r.calls = buildCallGraphFromRepo(r)
+		r.imports = buildImportGraphFromRepo(r)
+	} else {
+		r.applyCallGraphDelta(changes)
+		r.applyImportGraphDelta(changes)
+	}
 	info := r.info
 	info.MemoryBytes = s.estimateMemory(r)
 	info.UpdatedAt = time.Now().UTC()

@@ -405,3 +405,29 @@ func max(a, b int64) int64 {
 	}
 	return b
 }
+
+// BenchmarkApplyAddOnly50k benchmarks Apply with adds only (incremental graph path).
+func BenchmarkApplyAddOnly50k(b *testing.B) {
+	store := NewMemory(0)
+	info := store.Create("/bench")
+	files := makeIndexedFiles(50000)
+	_, err := store.Replace(info.ID, files, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	// Prepare 100 new files to add per iteration.
+	newFiles := make(map[string]IndexedFile, 100)
+	rng := rand.New(rand.NewSource(99))
+	for i := 0; i < 100; i++ {
+		path := fmt.Sprintf("/bench/src/com/example/New%06d.java", i)
+		newFiles[path] = IndexedFile{Facts: makeFileIndex(rng, path), Size: 1000, ModTime: int64(i)}
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := store.Apply(info.ID, ChangeSet{Added: newFiles})
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
