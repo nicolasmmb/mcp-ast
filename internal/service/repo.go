@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"os"
@@ -671,11 +672,18 @@ func absOrErr(dir string) (string, error) {
 }
 
 func fileDigest(p string) ([32]byte, error) {
-	data, err := os.ReadFile(p)
+	f, err := os.Open(p)
 	if err != nil {
 		return [32]byte{}, err
 	}
-	return sha256.Sum256(data), nil
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return [32]byte{}, err
+	}
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out, nil
 }
 
 // --- graph queries ---------------------------------------------------------
