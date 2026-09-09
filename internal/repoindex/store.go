@@ -63,6 +63,7 @@ type Store interface {
 	Apply(id string, changes ChangeSet) (Info, error)
 	Info(id string) (Info, bool)
 	Meta(id string) (map[string]IndexedFile, bool)
+	SnapshotData(id string, header SnapshotHeader) (*Snapshot, bool)
 	Drop(id string) bool
 	Files(id string) (map[string]*engine.FileIndex, bool)
 	Symbols(id string) (map[string]map[string][]engine.Symbol, bool)
@@ -404,6 +405,22 @@ func (s *MemoryStore) Meta(id string) (map[string]IndexedFile, bool) {
 		out[r.filePath(fid)] = *f
 	}
 	return out, true
+}
+
+// SnapshotData builds a Snapshot directly from r.files without copying
+// IndexedFile values — the gob encoder reads from the live map.
+func (s *MemoryStore) SnapshotData(id string, header SnapshotHeader) (*Snapshot, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	r, ok := s.repos[id]
+	if !ok {
+		return nil, false
+	}
+	snap := &Snapshot{Header: header, Files: make(map[string]IndexedFile, len(r.files))}
+	for fid, f := range r.files {
+		snap.Files[r.filePath(fid)] = *f
+	}
+	return snap, true
 }
 
 func (s *MemoryStore) Drop(id string) bool {

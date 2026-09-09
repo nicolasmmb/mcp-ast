@@ -437,20 +437,17 @@ func (s *RepoService) saveSnapshot(id string) {
 	if !ok {
 		return
 	}
-	meta, ok := s.store.Meta(id)
-	if !ok {
-		return
-	}
 	langs, _ := s.snapshotLangs.Load(id)
 	names, _ := langs.([]string)
-	snap := &repoindex.Snapshot{
-		Header: repoindex.SnapshotHeader{
-			SchemaVersion: repoindex.SnapshotSchemaVersion,
-			ToolVersion:   s.toolVersion,
-			Root:          info.Root,
-			Languages:     strings.Join(names, ","),
-		},
-		Files: meta,
+	header := repoindex.SnapshotHeader{
+		SchemaVersion: repoindex.SnapshotSchemaVersion,
+		ToolVersion:   s.toolVersion,
+		Root:          info.Root,
+		Languages:     strings.Join(names, ","),
+	}
+	snap, ok := s.store.SnapshotData(id, header)
+	if !ok {
+		return
 	}
 	s.snapshotMu.Lock()
 	defer s.snapshotMu.Unlock()
