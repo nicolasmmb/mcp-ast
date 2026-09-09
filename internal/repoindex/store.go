@@ -268,7 +268,6 @@ func (s *MemoryStore) Replace(id string, files map[string]IndexedFile, errs map[
 	r.fileMemory = make(map[FileID]int64)
 	r.complexity = nil
 	r.errors = map[string]string{}
-	memory := int64(0)
 	paths := make([]string, 0, len(files))
 	for p := range files {
 		paths = append(paths, p)
@@ -279,7 +278,7 @@ func (s *MemoryStore) Replace(id string, files map[string]IndexedFile, errs map[
 		cp := f
 		fid := r.internFile(p)
 		r.files[fid] = &cp
-		memory += r.insert(fid, &cp)
+		r.insert(fid, &cp)
 	}
 	r.errors = errs
 	if r.errors == nil {
@@ -292,9 +291,9 @@ func (s *MemoryStore) Replace(id string, files map[string]IndexedFile, errs map[
 	r.enrich()
 	r.calls = buildCallGraph(r.filesByPath())
 	r.imports = buildImportGraph(r.filesByPath())
-	r.info.MemoryBytes = memory
+	r.info.MemoryBytes = s.estimateMemory(r)
 	r.info.UpdatedAt = time.Now().UTC()
-	if s.limit > 0 && memory > s.limit {
+	if s.limit > 0 && r.info.MemoryBytes > s.limit {
 		r.info.State = "partial"
 		r.info.Files = 0
 	} else {
@@ -703,12 +702,88 @@ func (r *repo) enrich() {
 
 func (s *MemoryStore) estimateMemory(r *repo) int64 {
 	var total int64
+
+	// Per-file facts (symbols, raw usages text, complexity).
 	for _, m := range r.fileMemory {
 		total += m
 	}
+
+	// Interned name strings.
 	for _, name := range r.names {
 		total += int64(len(name) + 8)
 	}
+
+	// files map: FileID -> *IndexedFile (pointer + map bucket).
+	total += int64(len(r.files)) * (8 + 48)
+
+	// fileIDs map: string -> FileID (string header + id + bucket).
+	for path := range r.fileIDs {
+		total += int64(len(path)) + 16 + 48
+	}
+
+	// paths slice.
+	total += int64(cap(r.paths)) * 8
+
+	// usages postings: map[NameID]map[FileID][]UsageRef.
+	// Each unique name -> outer map entry. Each file -> inner map entry.
+	// Each []UsageRef element -> UsageRef struct (Row 4 + Col 4 + Kind 1
+	// + Caller 4 + Canonical 4 + Text string header 16 = 33, rounded to 40).
+	var usageCount int64
+	for _, byFile := range r.usages {
+		total += 48 // outer map bucket
+		for _, refs := range byFile {
+			total += 48         // inner map bucket
+			total += int64(len(refs)) * 40 // UsageRef structs
+			for _, ref := range refs {
+				total += int64(len(ref.Text))
+			}
+			usageCount += int64(len(refs))
+		}
+	}
+
+	// fileUsages mirror: same structure, same total UsageRef count.
+	var fileUsageCount int64
+	for _, nameMap := range r.fileUsages {
+		total += 48
+		for _, refs := range nameMap {
+			total += 48
+			total += int64(len(refs)) * 40
+			fileUsageCount += int64(len(refs))
+		}
+	}
+
+	// byCanonical: subset of usages (unambiguous names only).
+	for _, byFile := range r.byCanonical {
+		total += 48
+		for _, refs := range byFile {
+			total += 48
+			total += int64(len(refs)) * 40
+		}
+	}
+
+	// complexity slice: RankedComplexity = File string + ComplexityEntry.
+	total += int64(len(r.complexity)) * 64
+
+	// CallGraph: two maps of string -> []CallEdge.
+	// CallEdge: File + Caller + Callee + Resolution strings + Count int ≈ 80 bytes.
+	var callEdgeCount int64
+	for _, edges := range r.calls.ByCaller {
+		total += 48 + int64(len(edges))*80
+		callEdgeCount += int64(len(edges))
+	}
+	for _, edges := range r.calls.ByCallee {
+		total += 48 + int64(len(edges))*80
+	}
+
+	// ImportGraph: two maps of string -> []ImportEdge.
+	// ImportEdge: File + Specifier + Resolved strings ≈ 48 bytes.
+	for _, edges := range r.imports.ByFile {
+		total += 48 + int64(len(edges))*48
+	}
+	for _, edges := range r.imports.BySpec {
+		total += 48 + int64(len(edges))*48
+	}
+
 	return total
 }
 

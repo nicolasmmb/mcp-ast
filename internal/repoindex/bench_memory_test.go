@@ -324,6 +324,35 @@ func TestMemoryProfile(t *testing.T) {
 	}
 }
 
+// TestEstimateMemoryVsActual asserts that estimateMemory is within 2x of the
+// actual heap delta measured via runtime.MemStats.
+func TestEstimateMemoryVsActual(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in short mode")
+	}
+	for _, n := range []int{1000, 10000, 50000} {
+		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
+			before := heapBytes()
+			store := NewMemory(0)
+			info := store.Create("/bench")
+			files := makeIndexedFiles(n)
+			_, err := store.Replace(info.ID, files, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			after := heapBytes()
+			delta := int64(after) - int64(before)
+			info2, _ := store.Info(info.ID)
+			est := info2.MemoryBytes
+			ratio := float64(delta) / float64(max(est, 1))
+			t.Logf("n=%d  heap_delta=%d  estimate=%d  ratio=%.2f", n, delta, est, ratio)
+			if ratio < 0.25 || ratio > 4.0 {
+				t.Errorf("estimate out of range: heap_delta=%d estimate=%d ratio=%.2f (want 0.25..4.0)", delta, est, ratio)
+			}
+		})
+	}
+}
+
 func max(a, b int64) int64 {
 	if a > b {
 		return a
