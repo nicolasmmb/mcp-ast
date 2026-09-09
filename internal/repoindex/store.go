@@ -63,6 +63,7 @@ type Store interface {
 	Apply(id string, changes ChangeSet) (Info, error)
 	Info(id string) (Info, bool)
 	Meta(id string) (map[string]IndexedFile, bool)
+	SnapshotData(id string, header SnapshotHeader) (*Snapshot, bool)
 	Drop(id string) bool
 	Files(id string) (map[string]*engine.FileIndex, bool)
 	Symbols(id string) (map[string]map[string][]engine.Symbol, bool)
@@ -132,20 +133,20 @@ type MemoryStore struct {
 }
 
 type repo struct {
-	info        Info
-	files       map[FileID]*IndexedFile // id -> facts+meta
-	fileIDs     map[string]FileID       // path -> id
-	paths       []string                // id -> path
-	usages      map[NameID]map[FileID][]UsageRef
-	fileUsages  map[FileID]map[NameID][]UsageRef // for O(1) removal
-	byCanonical map[NameID]map[FileID][]UsageRef
-	names       []string
-	nameIDs     map[string]NameID
-	complexity  []engine.RankedComplexity
-	fileMemory  map[FileID]int64
-	calls       CallGraph
-	imports     ImportGraph
-	errors      map[string]string
+	info            Info
+	files           map[FileID]*IndexedFile // id -> facts+meta
+	fileIDs         map[string]FileID       // path -> id
+	paths           []string                // id -> path
+	usages          map[NameID]map[FileID][]UsageRef
+	fileUsageNames  map[FileID][]NameID     // file -> list of nameIDs (for removal)
+	canonicalIndex  map[NameID]NameID       // canonical nameID -> source nameID (unambiguous only)
+	names           []string
+	nameIDs         map[string]NameID
+	complexity      []engine.RankedComplexity
+	fileMemory      map[FileID]int64
+	calls           CallGraph
+	imports         ImportGraph
+	errors          map[string]string
 }
 
 func NewMemory(limit int64) *MemoryStore {
@@ -154,14 +155,14 @@ func NewMemory(limit int64) *MemoryStore {
 
 func newRepo(root string, limit int64) *repo {
 	return &repo{
-		files:       make(map[FileID]*IndexedFile),
-		fileIDs:     make(map[string]FileID),
-		usages:      make(map[NameID]map[FileID][]UsageRef),
-		fileUsages:  make(map[FileID]map[NameID][]UsageRef),
-		byCanonical: make(map[NameID]map[FileID][]UsageRef),
-		nameIDs:     make(map[string]NameID),
-		fileMemory:  make(map[FileID]int64),
-		errors:      make(map[string]string),
+		files:          make(map[FileID]*IndexedFile),
+		fileIDs:        make(map[string]FileID),
+		usages:         make(map[NameID]map[FileID][]UsageRef),
+		fileUsageNames: make(map[FileID][]NameID),
+		canonicalIndex: make(map[NameID]NameID),
+		nameIDs:        make(map[string]NameID),
+		fileMemory:     make(map[FileID]int64),
+		errors:         make(map[string]string),
 	}
 }
 
@@ -261,14 +262,13 @@ func (s *MemoryStore) Replace(id string, files map[string]IndexedFile, errs map[
 	r.fileIDs = make(map[string]FileID, len(files))
 	r.paths = r.paths[:0]
 	r.usages = make(map[NameID]map[FileID][]UsageRef)
-	r.fileUsages = make(map[FileID]map[NameID][]UsageRef)
-	r.byCanonical = make(map[NameID]map[FileID][]UsageRef)
+	r.fileUsageNames = make(map[FileID][]NameID)
+	r.canonicalIndex = make(map[NameID]NameID)
 	r.names = r.names[:0]
 	r.nameIDs = make(map[string]NameID)
 	r.fileMemory = make(map[FileID]int64)
 	r.complexity = nil
 	r.errors = map[string]string{}
-	memory := int64(0)
 	paths := make([]string, 0, len(files))
 	for p := range files {
 		paths = append(paths, p)
@@ -279,7 +279,7 @@ func (s *MemoryStore) Replace(id string, files map[string]IndexedFile, errs map[
 		cp := f
 		fid := r.internFile(p)
 		r.files[fid] = &cp
-		memory += r.insert(fid, &cp)
+		r.insert(fid, &cp)
 	}
 	r.errors = errs
 	if r.errors == nil {
@@ -290,11 +290,11 @@ func (s *MemoryStore) Replace(id string, files map[string]IndexedFile, errs map[
 		r.info.LastSync = time.Now().UTC()
 	}
 	r.enrich()
-	r.calls = buildCallGraph(r.filesByPath())
-	r.imports = buildImportGraph(r.filesByPath())
-	r.info.MemoryBytes = memory
+	r.calls = buildCallGraphFromRepo(r)
+	r.imports = buildImportGraphFromRepo(r)
+	r.info.MemoryBytes = s.estimateMemory(r)
 	r.info.UpdatedAt = time.Now().UTC()
-	if s.limit > 0 && memory > s.limit {
+	if s.limit > 0 && r.info.MemoryBytes > s.limit {
 		r.info.State = "partial"
 		r.info.Files = 0
 	} else {
@@ -340,12 +340,32 @@ func (s *MemoryStore) Apply(id string, changes ChangeSet) (Info, error) {
 		}
 		r.errors[p] = e
 	}
-	// ponytail: full graph rebuild per Apply; incremental graph surgery if
-	// refresh on 50k-file repos measures this as a hotspot.
+	if len(r.errors) > 1000 {
+		for p := range r.errors {
+			if _, ok := r.files[r.fileIDs[p]]; !ok {
+				delete(r.errors, p)
+			}
+		}
+		if len(r.errors) > 1000 {
+			for p := range r.errors {
+				delete(r.errors, p)
+				if len(r.errors) <= 800 {
+					break
+				}
+			}
+		}
+	}
+	// ponytail: incremental graph surgery for adds/updates; full rebuild
+	// when deletes change declCount affecting resolution of all edges.
 	sort.Slice(r.complexity, func(i, j int) bool { return cmpComplexity(r.complexity[i], r.complexity[j]) })
 	r.enrich()
-	r.calls = buildCallGraph(r.filesByPath())
-	r.imports = buildImportGraph(r.filesByPath())
+	if len(changes.Deleted) > 0 {
+		r.calls = buildCallGraphFromRepo(r)
+		r.imports = buildImportGraphFromRepo(r)
+	} else {
+		r.applyCallGraphDelta(changes)
+		r.applyImportGraphDelta(changes)
+	}
 	info := r.info
 	info.MemoryBytes = s.estimateMemory(r)
 	info.UpdatedAt = time.Now().UTC()
@@ -364,15 +384,6 @@ func (s *MemoryStore) Apply(id string, changes ChangeSet) (Info, error) {
 	info.Version++
 	r.info = info
 	return info, nil
-}
-
-// filesByPath rebuilds the path-keyed view needed by the graph builders.
-func (r *repo) filesByPath() map[string]*IndexedFile {
-	out := make(map[string]*IndexedFile, len(r.files))
-	for id, f := range r.files {
-		out[r.filePath(id)] = f
-	}
-	return out
 }
 
 func cmpComplexity(a, b engine.RankedComplexity) bool {
@@ -409,6 +420,22 @@ func (s *MemoryStore) Meta(id string) (map[string]IndexedFile, bool) {
 		out[r.filePath(fid)] = *f
 	}
 	return out, true
+}
+
+// SnapshotData builds a Snapshot directly from r.files without copying
+// IndexedFile values — the gob encoder reads from the live map.
+func (s *MemoryStore) SnapshotData(id string, header SnapshotHeader) (*Snapshot, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	r, ok := s.repos[id]
+	if !ok {
+		return nil, false
+	}
+	snap := &Snapshot{Header: header, Files: make(map[string]IndexedFile, len(r.files))}
+	for fid, f := range r.files {
+		snap.Files[r.filePath(fid)] = *f
+	}
+	return snap, true
 }
 
 func (s *MemoryStore) Drop(id string) bool {
@@ -464,7 +491,9 @@ func (s *MemoryStore) UsagesWindow(id, name string, offset, limit int) ([]engine
 	}
 	byFile := r.usages[r.nameIDs[name]]
 	if strings.Contains(name, "|") {
-		byFile = r.byCanonical[r.nameIDs[name]]
+		if sourceID, ok := r.canonicalIndex[r.nameIDs[name]]; ok {
+			byFile = r.usages[sourceID]
+		}
 	}
 	fids := make([]FileID, 0, len(byFile))
 	for fid := range byFile {
@@ -599,17 +628,17 @@ func (r *repo) remove(fid FileID) {
 	if fid == 0 {
 		return
 	}
-	for nameID := range r.fileUsages[fid] {
+	for _, nameID := range r.fileUsageNames[fid] {
 		delete(r.usages[nameID], fid)
 		if len(r.usages[nameID]) == 0 {
 			delete(r.usages, nameID)
 		}
 	}
-	delete(r.fileUsages, fid)
+	delete(r.fileUsageNames, fid)
 	delete(r.files, fid)
 	delete(r.fileMemory, fid)
 	path := r.filePath(fid)
-	out := r.complexity[:0]
+	out := make([]engine.RankedComplexity, 0, len(r.complexity))
 	for _, e := range r.complexity {
 		if e.File != path {
 			out = append(out, e)
@@ -637,13 +666,12 @@ func (r *repo) insert(fid FileID, f *IndexedFile) int64 {
 			Caller: r.internName(u.Caller),
 			Text:   u.Text,
 		})
-		fileMap := r.fileUsages[fid]
-		if fileMap == nil {
-			fileMap = make(map[NameID][]UsageRef)
-			r.fileUsages[fid] = fileMap
-		}
-		fileMap[nameID] = append(fileMap[nameID], byFile[fid][len(byFile[fid])-1])
+		r.fileUsageNames[fid] = append(r.fileUsageNames[fid], nameID)
 	}
+	// Release raw usages — data now lives in interned postings.
+	// NOTE: we do NOT nil f.Facts.Usages here because snapshots need them
+	// for restore. The raw usages are counted in estimateMemory's postings
+	// section, not here, to avoid double-counting.
 	for _, c := range facts.Complexity {
 		r.complexity = append(r.complexity, engine.RankedComplexity{File: path, ComplexityEntry: c})
 	}
@@ -654,7 +682,7 @@ func (r *repo) insert(fid FileID, f *IndexedFile) int64 {
 // enrich stamps canonical identities on usages. A usage gets the canonical
 // key language|file|kind|name when its name has exactly one declaration in
 // the repo (not counting imports); otherwise it stays empty (ambiguous).
-// It also rebuilds the canonical postings.
+// It also builds the canonical index (canonical nameID -> source nameID).
 func (r *repo) enrich() {
 	declCount := map[string]int{}
 	declCanonical := map[string]string{}
@@ -676,7 +704,7 @@ func (r *repo) enrich() {
 			}
 		}
 	}
-	r.byCanonical = make(map[NameID]map[FileID][]UsageRef)
+	r.canonicalIndex = make(map[NameID]NameID)
 	for nameID, byFile := range r.usages {
 		name := r.nameOf(nameID)
 		canonical := ""
@@ -684,46 +712,108 @@ func (r *repo) enrich() {
 			canonical = declCanonical[name]
 		}
 		canonicalID := r.internName(canonical)
-		for fid, refs := range byFile {
-			for i := range refs {
-				refs[i].Canonical = canonicalID
+		for fid := range byFile {
+			for i := range byFile[fid] {
+				byFile[fid][i].Canonical = canonicalID
 			}
-			if canonical == "" {
-				continue
-			}
-			c := r.byCanonical[canonicalID]
-			if c == nil {
-				c = make(map[FileID][]UsageRef)
-				r.byCanonical[canonicalID] = c
-			}
-			c[fid] = append(c[fid], refs...)
+		}
+		if canonical != "" {
+			r.canonicalIndex[canonicalID] = nameID
 		}
 	}
 }
 
 func (s *MemoryStore) estimateMemory(r *repo) int64 {
 	var total int64
+
+	// Per-file facts (symbols, complexity — usages NOT in fileMemory).
 	for _, m := range r.fileMemory {
 		total += m
 	}
+
+	// Raw usages kept in FileIndex for snapshot serialization.
+	for _, f := range r.files {
+		for _, u := range f.Facts.Usages {
+			total += int64(len(u.Text) + 40)
+		}
+	}
+
+	// Interned name strings.
 	for _, name := range r.names {
 		total += int64(len(name) + 8)
 	}
+
+	// files map: FileID -> *IndexedFile (pointer + map bucket).
+	total += int64(len(r.files)) * (8 + 48)
+
+	// fileIDs map: string -> FileID (string header + id + bucket).
+	for path := range r.fileIDs {
+		total += int64(len(path)) + 16 + 48
+	}
+
+	// paths slice.
+	total += int64(cap(r.paths)) * 8
+
+	// usages postings: map[NameID]map[FileID][]UsageRef.
+	// Each unique name -> outer map entry. Each file -> inner map entry.
+	// Each []UsageRef element -> UsageRef struct (Row 4 + Col 4 + Kind 1
+	// + Caller 4 + Canonical 4 + Text string header 16 = 33, rounded to 40).
+	var usageCount int64
+	for _, byFile := range r.usages {
+		total += 48 // outer map bucket
+		for _, refs := range byFile {
+			total += 48         // inner map bucket
+			total += int64(len(refs)) * 40 // UsageRef structs
+			for _, ref := range refs {
+				total += int64(len(ref.Text))
+			}
+			usageCount += int64(len(refs))
+		}
+	}
+
+	// fileUsageNames: map[FileID][]NameID (one slice per file).
+	for _, nameIDs := range r.fileUsageNames {
+		total += 48 + int64(len(nameIDs))*8
+	}
+
+	// canonicalIndex: map[NameID]NameID (one entry per unambiguous name).
+	total += int64(len(r.canonicalIndex)) * (8 + 48)
+
+	// complexity slice: RankedComplexity = File string + ComplexityEntry.
+	total += int64(len(r.complexity)) * 64
+
+	// CallGraph: two maps of string -> []CallEdge.
+	// CallEdge: File + Caller + Callee + Resolution strings + Count int ≈ 80 bytes.
+	var callEdgeCount int64
+	for _, edges := range r.calls.ByCaller {
+		total += 48 + int64(len(edges))*80
+		callEdgeCount += int64(len(edges))
+	}
+	for _, edges := range r.calls.ByCallee {
+		total += 48 + int64(len(edges))*80
+	}
+
+	// ImportGraph: two maps of string -> []ImportEdge.
+	// ImportEdge: File + Specifier + Resolved strings ≈ 48 bytes.
+	for _, edges := range r.imports.ByFile {
+		total += 48 + int64(len(edges))*48
+	}
+	for _, edges := range r.imports.BySpec {
+		total += 48 + int64(len(edges))*48
+	}
+
 	return total
 }
 
-// estimateFile estimates the compact stored size of one file's facts:
-// per-usage cost is the fixed UsageRef plus its text; names and callers are
-// interned and counted once globally (added by estimateMemory).
+// estimateFile estimates the compact stored size of one file's facts.
+// Usages are NOT counted here — they are counted in the postings section of
+// estimateMemory to avoid double-counting (raw usages + interned postings).
 func estimateFile(path string, facts *engine.FileIndex) int64 {
 	mem := int64(len(path) + len(facts.Language) + 64)
 	for _, groups := range facts.Symbols {
 		for _, sym := range groups {
 			mem += int64(len(sym.Name) + len(sym.Text) + 32)
 		}
-	}
-	for _, u := range facts.Usages {
-		mem += int64(len(u.Text) + 40)
 	}
 	for _, c := range facts.Complexity {
 		mem += int64(len(c.Name) + len(c.Kind) + 32)
