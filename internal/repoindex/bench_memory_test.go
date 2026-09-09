@@ -218,7 +218,7 @@ func BenchmarkBuildGraphs10k(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = buildCallGraph(r.filesByPath())
+		_ = buildCallGraphFromRepo(r)
 		_ = buildImportGraph(r.filesByPath())
 	}
 }
@@ -235,7 +235,7 @@ func BenchmarkBuildGraphs50k(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = buildCallGraph(r.filesByPath())
+		_ = buildCallGraphFromRepo(r)
 		_ = buildImportGraph(r.filesByPath())
 	}
 }
@@ -348,6 +348,52 @@ func TestEstimateMemoryVsActual(t *testing.T) {
 			t.Logf("n=%d  heap_delta=%d  estimate=%d  ratio=%.2f", n, delta, est, ratio)
 			if ratio < 0.25 || ratio > 4.0 {
 				t.Errorf("estimate out of range: heap_delta=%d estimate=%d ratio=%.2f (want 0.25..4.0)", delta, est, ratio)
+			}
+		})
+	}
+}
+
+// TestCallGraphEquivalence verifies that buildCallGraphFromRepo produces
+// identical results to the old buildCallGraph that read from FileIndex.Usages.
+func TestCallGraphEquivalence(t *testing.T) {
+	for _, n := range []int{10, 100, 1000} {
+		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
+			// Build old-style call graph from raw FileIndex.Usages FIRST,
+			// before insert() nils them out.
+			oldFiles := make(map[string]*IndexedFile, n)
+			rng := rand.New(rand.NewSource(42))
+			for i := 0; i < n; i++ {
+				path := fmt.Sprintf("/bench/src/com/example/File%06d.java", i)
+				facts := makeFileIndex(rng, path)
+				oldFiles[path] = &IndexedFile{Facts: facts, Size: 1000, ModTime: int64(i)}
+			}
+			oldGraph := buildCallGraph(oldFiles)
+
+			// Build new-style call graph from interned postings.
+			r := newRepo("/bench", 0)
+			for p, f := range oldFiles {
+				fid := r.internFile(p)
+				cp := *f
+				r.files[fid] = &cp
+				r.insert(fid, &cp)
+			}
+			newGraph := buildCallGraphFromRepo(r)
+
+			// Compare ByCaller.
+			if len(oldGraph.ByCaller) != len(newGraph.ByCaller) {
+				t.Fatalf("ByCaller len: old=%d new=%d", len(oldGraph.ByCaller), len(newGraph.ByCaller))
+			}
+			for caller, oldEdges := range oldGraph.ByCaller {
+				newEdges := newGraph.ByCaller[caller]
+				if len(oldEdges) != len(newEdges) {
+					t.Errorf("ByCaller[%s] len: old=%d new=%d", caller, len(oldEdges), len(newEdges))
+					continue
+				}
+				for i := range oldEdges {
+					if oldEdges[i].Callee != newEdges[i].Callee || oldEdges[i].Count != newEdges[i].Count || oldEdges[i].File != newEdges[i].File {
+						t.Errorf("ByCaller[%s][%d]: old=%+v new=%+v", caller, i, oldEdges[i], newEdges[i])
+					}
+				}
 			}
 		})
 	}

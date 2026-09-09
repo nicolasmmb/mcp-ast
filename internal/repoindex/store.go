@@ -289,7 +289,7 @@ func (s *MemoryStore) Replace(id string, files map[string]IndexedFile, errs map[
 		r.info.LastSync = time.Now().UTC()
 	}
 	r.enrich()
-	r.calls = buildCallGraph(r.filesByPath())
+	r.calls = buildCallGraphFromRepo(r)
 	r.imports = buildImportGraph(r.filesByPath())
 	r.info.MemoryBytes = s.estimateMemory(r)
 	r.info.UpdatedAt = time.Now().UTC()
@@ -343,7 +343,7 @@ func (s *MemoryStore) Apply(id string, changes ChangeSet) (Info, error) {
 	// refresh on 50k-file repos measures this as a hotspot.
 	sort.Slice(r.complexity, func(i, j int) bool { return cmpComplexity(r.complexity[i], r.complexity[j]) })
 	r.enrich()
-	r.calls = buildCallGraph(r.filesByPath())
+	r.calls = buildCallGraphFromRepo(r)
 	r.imports = buildImportGraph(r.filesByPath())
 	info := r.info
 	info.MemoryBytes = s.estimateMemory(r)
@@ -640,6 +640,10 @@ func (r *repo) insert(fid FileID, f *IndexedFile) int64 {
 		})
 		r.fileUsageNames[fid] = append(r.fileUsageNames[fid], nameID)
 	}
+	// Release raw usages — data now lives in interned postings.
+	// NOTE: we do NOT nil f.Facts.Usages here because snapshots need them
+	// for restore. The raw usages are counted in estimateMemory's postings
+	// section, not here, to avoid double-counting.
 	for _, c := range facts.Complexity {
 		r.complexity = append(r.complexity, engine.RankedComplexity{File: path, ComplexityEntry: c})
 	}
@@ -694,9 +698,16 @@ func (r *repo) enrich() {
 func (s *MemoryStore) estimateMemory(r *repo) int64 {
 	var total int64
 
-	// Per-file facts (symbols, raw usages text, complexity).
+	// Per-file facts (symbols, complexity — usages NOT in fileMemory).
 	for _, m := range r.fileMemory {
 		total += m
+	}
+
+	// Raw usages kept in FileIndex for snapshot serialization.
+	for _, f := range r.files {
+		for _, u := range f.Facts.Usages {
+			total += int64(len(u.Text) + 40)
+		}
 	}
 
 	// Interned name strings.
@@ -766,18 +777,15 @@ func (s *MemoryStore) estimateMemory(r *repo) int64 {
 	return total
 }
 
-// estimateFile estimates the compact stored size of one file's facts:
-// per-usage cost is the fixed UsageRef plus its text; names and callers are
-// interned and counted once globally (added by estimateMemory).
+// estimateFile estimates the compact stored size of one file's facts.
+// Usages are NOT counted here — they are counted in the postings section of
+// estimateMemory to avoid double-counting (raw usages + interned postings).
 func estimateFile(path string, facts *engine.FileIndex) int64 {
 	mem := int64(len(path) + len(facts.Language) + 64)
 	for _, groups := range facts.Symbols {
 		for _, sym := range groups {
 			mem += int64(len(sym.Name) + len(sym.Text) + 32)
 		}
-	}
-	for _, u := range facts.Usages {
-		mem += int64(len(u.Text) + 40)
 	}
 	for _, c := range facts.Complexity {
 		mem += int64(len(c.Name) + len(c.Kind) + 32)

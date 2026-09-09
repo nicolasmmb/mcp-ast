@@ -88,6 +88,69 @@ func buildCallGraph(files map[string]*IndexedFile) CallGraph {
 	return g
 }
 
+// buildCallGraphFromRepo builds the call graph from interned postings in r.usages
+// instead of raw FileIndex.Usages. This allows nil-ing out FileIndex.Usages after insert.
+func buildCallGraphFromRepo(r *repo) CallGraph {
+	declCount := map[string]int{}
+	for _, f := range r.files {
+		for kind, syms := range f.Facts.Symbols {
+			if kind == "imports" {
+				continue
+			}
+			for _, s := range syms {
+				if name := strings.TrimSpace(s.Name); name != "" {
+					declCount[name]++
+				}
+			}
+		}
+	}
+	resolution := func(callee string) string {
+		switch declCount[callee] {
+		case 1:
+			return "exact"
+		case 0:
+			return "unresolved"
+		default:
+			return "candidate"
+		}
+	}
+	agg := map[string]*CallEdge{}
+	for nameID, byFile := range r.usages {
+		calleeName := r.nameOf(nameID)
+		for fid, refs := range byFile {
+			path := r.filePath(fid)
+			for _, ref := range refs {
+				if ref.Kind != kindCallSite {
+					continue
+				}
+				callerName := r.nameOf(ref.Caller)
+				if callerName == "" || calleeName == "" {
+					continue
+				}
+				key := path + "|" + callerName + "|" + calleeName
+				e := agg[key]
+				if e == nil {
+					e = &CallEdge{File: path, Caller: callerName, Callee: calleeName, Resolution: resolution(calleeName)}
+					agg[key] = e
+				}
+				e.Count++
+			}
+		}
+	}
+	g := CallGraph{ByCaller: map[string][]CallEdge{}, ByCallee: map[string][]CallEdge{}}
+	for _, e := range agg {
+		g.ByCaller[e.Caller] = append(g.ByCaller[e.Caller], *e)
+		g.ByCallee[e.Callee] = append(g.ByCallee[e.Callee], *e)
+	}
+	for _, es := range g.ByCaller {
+		sortEdges(es)
+	}
+	for _, es := range g.ByCallee {
+		sortEdges(es)
+	}
+	return g
+}
+
 func sortEdges(edges []CallEdge) {
 	sort.Slice(edges, func(i, j int) bool {
 		if edges[i].Caller != edges[j].Caller {
