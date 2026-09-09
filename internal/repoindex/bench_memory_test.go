@@ -431,3 +431,119 @@ func BenchmarkApplyAddOnly50k(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkChurn50k simulates high file churn: 100 rounds of deleting 500
+// files and adding 500. Measures heap stability.
+func BenchmarkChurn50k(b *testing.B) {
+	const total = 50000
+	const batchSize = 500
+	const rounds = 100
+	store := NewMemory(0)
+	info := store.Create("/bench")
+	files := makeIndexedFiles(total)
+	_, err := store.Replace(info.ID, files, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	// Build list of all paths so we can pick random ones to delete.
+	allPaths := make([]string, 0, total)
+	for p := range files {
+		allPaths = append(allPaths, p)
+	}
+	rng := rand.New(rand.NewSource(77))
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		// reset the index from scratch each iteration
+		store.Replace(info.ID, makeIndexedFiles(total), nil)
+		for round := 0; round < rounds; round++ {
+			delSet := map[string]bool{}
+			for j := 0; j < batchSize; j++ {
+				idx := rng.Intn(len(allPaths))
+				delSet[allPaths[idx]] = true
+			}
+			del := make([]string, 0, len(delSet))
+			for p := range delSet {
+				del = append(del, p)
+			}
+			added := map[string]IndexedFile{}
+			for j := 0; j < batchSize; j++ {
+				path := fmt.Sprintf("/bench/src/com/example/Churn%06d_R%06d_I%06d.java", i, round, j)
+				added[path] = IndexedFile{Facts: makeFileIndex(rng, path), Size: 1000, ModTime: int64(round*batchSize + j)}
+			}
+			store.Apply(info.ID, ChangeSet{Deleted: del, Added: added})
+		}
+	}
+}
+
+// TestChurnMemoryStabilization verifies heap stabilizes under churn.
+func TestChurnMemoryStabilization(t *testing.T) {
+	const total = 10000
+	const batchSize = 200
+	const rounds = 100
+	store := NewMemory(0)
+	info := store.Create("/bench")
+	files := makeIndexedFiles(total)
+	_, err := store.Replace(info.ID, files, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allPaths := make([]string, 0, total)
+	for p := range files {
+		allPaths = append(allPaths, p)
+	}
+	rng := rand.New(rand.NewSource(77))
+
+	// Measure heap AFTER initial load (this is our baseline).
+	runtime.GC()
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	memBase := int64(m.HeapInuse)
+
+	// Track heap at checkpoints.
+	heaps := make([]int64, 0, 21)
+
+	for round := 0; round < rounds; round++ {
+		delSet := map[string]bool{}
+		for j := 0; j < batchSize; j++ {
+			idx := rng.Intn(len(allPaths))
+			delSet[allPaths[idx]] = true
+		}
+		del := make([]string, 0, len(delSet))
+		for p := range delSet {
+			del = append(del, p)
+		}
+		added := map[string]IndexedFile{}
+		for j := 0; j < batchSize; j++ {
+			path := fmt.Sprintf("/bench/src/com/example/Churn_R%06d_I%06d.java", round, j)
+			added[path] = IndexedFile{Facts: makeFileIndex(rng, path), Size: 1000, ModTime: int64(round*batchSize + j)}
+		}
+		_, err := store.Apply(info.ID, ChangeSet{Deleted: del, Added: added})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if round%5 == 0 {
+			runtime.GC()
+			runtime.ReadMemStats(&m)
+			heaps = append(heaps, int64(m.HeapInuse))
+		}
+	}
+
+	// After churn: heap should be within 50% of baseline.
+	runtime.GC()
+	runtime.ReadMemStats(&m)
+	memFinal := int64(m.HeapInuse)
+	t.Logf("heap_base=%d MB heap_final=%d MB delta=%d MB", memBase/(1024*1024), memFinal/(1024*1024), (memFinal-memBase)/(1024*1024))
+
+	// Print heap progression.
+	for i, h := range heaps {
+		t.Logf("  round %d: heap=%d MB", i*5, h/(1024*1024))
+	}
+
+	// Final heap should not exceed 150% of baseline.
+	limit := memBase + memBase/2
+	if memFinal > limit {
+		t.Errorf("heap grew too much: final=%d limit=%d", memFinal, limit)
+	}
+}

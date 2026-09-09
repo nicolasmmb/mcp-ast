@@ -340,6 +340,21 @@ func (s *MemoryStore) Apply(id string, changes ChangeSet) (Info, error) {
 		}
 		r.errors[p] = e
 	}
+	if len(r.errors) > 1000 {
+		for p := range r.errors {
+			if _, ok := r.files[r.fileIDs[p]]; !ok {
+				delete(r.errors, p)
+			}
+		}
+		if len(r.errors) > 1000 {
+			for p := range r.errors {
+				delete(r.errors, p)
+				if len(r.errors) <= 800 {
+					break
+				}
+			}
+		}
+	}
 	// ponytail: incremental graph surgery for adds/updates; full rebuild
 	// when deletes change declCount affecting resolution of all edges.
 	sort.Slice(r.complexity, func(i, j int) bool { return cmpComplexity(r.complexity[i], r.complexity[j]) })
@@ -623,7 +638,7 @@ func (r *repo) remove(fid FileID) {
 	delete(r.files, fid)
 	delete(r.fileMemory, fid)
 	path := r.filePath(fid)
-	out := r.complexity[:0]
+	out := make([]engine.RankedComplexity, 0, len(r.complexity))
 	for _, e := range r.complexity {
 		if e.File != path {
 			out = append(out, e)

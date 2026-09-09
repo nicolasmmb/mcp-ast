@@ -345,8 +345,10 @@ func (r *repo) applyCallGraphDelta(changes ChangeSet) {
 		}
 		if n == 0 {
 			delete(r.calls.ByCaller, caller)
-		} else {
-			r.calls.ByCaller[caller] = edges[:n]
+		} else if n < len(edges) {
+			compact := make([]CallEdge, n)
+			copy(compact, edges[:n])
+			r.calls.ByCaller[caller] = compact
 		}
 	}
 	for callee, edges := range r.calls.ByCallee {
@@ -359,8 +361,10 @@ func (r *repo) applyCallGraphDelta(changes ChangeSet) {
 		}
 		if n == 0 {
 			delete(r.calls.ByCallee, callee)
-		} else {
-			r.calls.ByCallee[callee] = edges[:n]
+		} else if n < len(edges) {
+			compact := make([]CallEdge, n)
+			copy(compact, edges[:n])
+			r.calls.ByCallee[callee] = compact
 		}
 	}
 
@@ -439,8 +443,10 @@ func (r *repo) applyImportGraphDelta(changes ChangeSet) {
 		}
 		if n == 0 {
 			delete(r.imports.BySpec, spec)
-		} else {
-			r.imports.BySpec[spec] = edges[:n]
+		} else if n < len(edges) {
+			compact := make([]ImportEdge, n)
+			copy(compact, edges[:n])
+			r.imports.BySpec[spec] = compact
 		}
 	}
 
