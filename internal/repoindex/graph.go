@@ -191,6 +191,37 @@ func buildImportGraph(files map[string]*IndexedFile) ImportGraph {
 	return g
 }
 
+// buildImportGraphFromRepo builds the import graph directly from r.files,
+// avoiding the temporary map allocation of filesByPath().
+func buildImportGraphFromRepo(r *repo) ImportGraph {
+	g := ImportGraph{ByFile: map[string][]ImportEdge{}, BySpec: map[string][]ImportEdge{}}
+	for fid, f := range r.files {
+		path := r.filePath(fid)
+		seen := map[string]bool{}
+		for kind, syms := range f.Facts.Symbols {
+			if kind != "imports" {
+				continue
+			}
+			for _, sym := range syms {
+				spec := importSpecifier(sym.Text)
+				if spec == "" || seen[path+"|"+spec] {
+					continue
+				}
+				seen[path+"|"+spec] = true
+				edge := ImportEdge{File: path, Specifier: spec}
+				g.ByFile[path] = append(g.ByFile[path], edge)
+				g.BySpec[spec] = append(g.BySpec[spec], edge)
+				if target, ok := resolveLocalImportFromRepo(path, r, spec); ok {
+					edgeResolved := ImportEdge{File: path, Specifier: spec, Resolved: target}
+					g.ByFile[path] = append(g.ByFile[path], edgeResolved)
+					g.BySpec[target] = append(g.BySpec[target], edgeResolved)
+				}
+			}
+		}
+	}
+	return g
+}
+
 func importSpecifier(text string) string {
 	for _, opener := range []string{`"`, "`", "'"} {
 		start := strings.Index(text, opener)
@@ -231,6 +262,34 @@ func resolveLocalImport(fromPath string, files map[string]*IndexedFile, spec str
 	}
 	if _, ok := files[target]; ok {
 		return target, true
+	}
+	return "", false
+}
+
+// resolveLocalImportFromRepo resolves imports using r.files directly,
+// avoiding the temporary filesByPath map.
+func resolveLocalImportFromRepo(fromPath string, r *repo, spec string) (string, bool) {
+	if !strings.HasPrefix(spec, "./") && !strings.HasPrefix(spec, "../") {
+		if strings.HasPrefix(spec, "internal/") {
+			for _, fid := range r.fileIDs {
+				p := r.filePath(fid)
+				if strings.HasSuffix(p, spec) {
+					return p, true
+				}
+			}
+		}
+		return "", false
+	}
+	rel := filepath.Join(filepath.Dir(fromPath), filepath.Clean(spec))
+	clean := filepath.Clean(rel)
+	target, err := filepath.Abs(clean)
+	if err != nil {
+		return "", false
+	}
+	for _, fid := range r.fileIDs {
+		if r.filePath(fid) == target {
+			return target, true
+		}
 	}
 	return "", false
 }

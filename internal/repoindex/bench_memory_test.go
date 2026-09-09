@@ -219,7 +219,7 @@ func BenchmarkBuildGraphs10k(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = buildCallGraphFromRepo(r)
-		_ = buildImportGraph(r.filesByPath())
+		_ = buildImportGraphFromRepo(r)
 	}
 }
 
@@ -236,7 +236,7 @@ func BenchmarkBuildGraphs50k(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = buildCallGraphFromRepo(r)
-		_ = buildImportGraph(r.filesByPath())
+		_ = buildImportGraphFromRepo(r)
 	}
 }
 

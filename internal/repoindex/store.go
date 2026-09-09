@@ -290,7 +290,7 @@ func (s *MemoryStore) Replace(id string, files map[string]IndexedFile, errs map[
 	}
 	r.enrich()
 	r.calls = buildCallGraphFromRepo(r)
-	r.imports = buildImportGraph(r.filesByPath())
+	r.imports = buildImportGraphFromRepo(r)
 	r.info.MemoryBytes = s.estimateMemory(r)
 	r.info.UpdatedAt = time.Now().UTC()
 	if s.limit > 0 && r.info.MemoryBytes > s.limit {
@@ -344,7 +344,7 @@ func (s *MemoryStore) Apply(id string, changes ChangeSet) (Info, error) {
 	sort.Slice(r.complexity, func(i, j int) bool { return cmpComplexity(r.complexity[i], r.complexity[j]) })
 	r.enrich()
 	r.calls = buildCallGraphFromRepo(r)
-	r.imports = buildImportGraph(r.filesByPath())
+	r.imports = buildImportGraphFromRepo(r)
 	info := r.info
 	info.MemoryBytes = s.estimateMemory(r)
 	info.UpdatedAt = time.Now().UTC()
@@ -363,15 +363,6 @@ func (s *MemoryStore) Apply(id string, changes ChangeSet) (Info, error) {
 	info.Version++
 	r.info = info
 	return info, nil
-}
-
-// filesByPath rebuilds the path-keyed view needed by the graph builders.
-func (r *repo) filesByPath() map[string]*IndexedFile {
-	out := make(map[string]*IndexedFile, len(r.files))
-	for id, f := range r.files {
-		out[r.filePath(id)] = f
-	}
-	return out
 }
 
 func cmpComplexity(a, b engine.RankedComplexity) bool {
