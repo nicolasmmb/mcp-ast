@@ -132,20 +132,20 @@ type MemoryStore struct {
 }
 
 type repo struct {
-	info        Info
-	files       map[FileID]*IndexedFile // id -> facts+meta
-	fileIDs     map[string]FileID       // path -> id
-	paths       []string                // id -> path
-	usages      map[NameID]map[FileID][]UsageRef
-	fileUsages  map[FileID]map[NameID][]UsageRef // for O(1) removal
-	byCanonical map[NameID]map[FileID][]UsageRef
-	names       []string
-	nameIDs     map[string]NameID
-	complexity  []engine.RankedComplexity
-	fileMemory  map[FileID]int64
-	calls       CallGraph
-	imports     ImportGraph
-	errors      map[string]string
+	info            Info
+	files           map[FileID]*IndexedFile // id -> facts+meta
+	fileIDs         map[string]FileID       // path -> id
+	paths           []string                // id -> path
+	usages          map[NameID]map[FileID][]UsageRef
+	fileUsageNames  map[FileID][]NameID     // file -> list of nameIDs (for removal)
+	canonicalIndex  map[NameID]NameID       // canonical nameID -> source nameID (unambiguous only)
+	names           []string
+	nameIDs         map[string]NameID
+	complexity      []engine.RankedComplexity
+	fileMemory      map[FileID]int64
+	calls           CallGraph
+	imports         ImportGraph
+	errors          map[string]string
 }
 
 func NewMemory(limit int64) *MemoryStore {
@@ -154,14 +154,14 @@ func NewMemory(limit int64) *MemoryStore {
 
 func newRepo(root string, limit int64) *repo {
 	return &repo{
-		files:       make(map[FileID]*IndexedFile),
-		fileIDs:     make(map[string]FileID),
-		usages:      make(map[NameID]map[FileID][]UsageRef),
-		fileUsages:  make(map[FileID]map[NameID][]UsageRef),
-		byCanonical: make(map[NameID]map[FileID][]UsageRef),
-		nameIDs:     make(map[string]NameID),
-		fileMemory:  make(map[FileID]int64),
-		errors:      make(map[string]string),
+		files:          make(map[FileID]*IndexedFile),
+		fileIDs:        make(map[string]FileID),
+		usages:         make(map[NameID]map[FileID][]UsageRef),
+		fileUsageNames: make(map[FileID][]NameID),
+		canonicalIndex: make(map[NameID]NameID),
+		nameIDs:        make(map[string]NameID),
+		fileMemory:     make(map[FileID]int64),
+		errors:         make(map[string]string),
 	}
 }
 
@@ -261,8 +261,8 @@ func (s *MemoryStore) Replace(id string, files map[string]IndexedFile, errs map[
 	r.fileIDs = make(map[string]FileID, len(files))
 	r.paths = r.paths[:0]
 	r.usages = make(map[NameID]map[FileID][]UsageRef)
-	r.fileUsages = make(map[FileID]map[NameID][]UsageRef)
-	r.byCanonical = make(map[NameID]map[FileID][]UsageRef)
+	r.fileUsageNames = make(map[FileID][]NameID)
+	r.canonicalIndex = make(map[NameID]NameID)
 	r.names = r.names[:0]
 	r.nameIDs = make(map[string]NameID)
 	r.fileMemory = make(map[FileID]int64)
@@ -463,7 +463,9 @@ func (s *MemoryStore) UsagesWindow(id, name string, offset, limit int) ([]engine
 	}
 	byFile := r.usages[r.nameIDs[name]]
 	if strings.Contains(name, "|") {
-		byFile = r.byCanonical[r.nameIDs[name]]
+		if sourceID, ok := r.canonicalIndex[r.nameIDs[name]]; ok {
+			byFile = r.usages[sourceID]
+		}
 	}
 	fids := make([]FileID, 0, len(byFile))
 	for fid := range byFile {
@@ -598,13 +600,13 @@ func (r *repo) remove(fid FileID) {
 	if fid == 0 {
 		return
 	}
-	for nameID := range r.fileUsages[fid] {
+	for _, nameID := range r.fileUsageNames[fid] {
 		delete(r.usages[nameID], fid)
 		if len(r.usages[nameID]) == 0 {
 			delete(r.usages, nameID)
 		}
 	}
-	delete(r.fileUsages, fid)
+	delete(r.fileUsageNames, fid)
 	delete(r.files, fid)
 	delete(r.fileMemory, fid)
 	path := r.filePath(fid)
@@ -636,12 +638,7 @@ func (r *repo) insert(fid FileID, f *IndexedFile) int64 {
 			Caller: r.internName(u.Caller),
 			Text:   u.Text,
 		})
-		fileMap := r.fileUsages[fid]
-		if fileMap == nil {
-			fileMap = make(map[NameID][]UsageRef)
-			r.fileUsages[fid] = fileMap
-		}
-		fileMap[nameID] = append(fileMap[nameID], byFile[fid][len(byFile[fid])-1])
+		r.fileUsageNames[fid] = append(r.fileUsageNames[fid], nameID)
 	}
 	for _, c := range facts.Complexity {
 		r.complexity = append(r.complexity, engine.RankedComplexity{File: path, ComplexityEntry: c})
@@ -653,7 +650,7 @@ func (r *repo) insert(fid FileID, f *IndexedFile) int64 {
 // enrich stamps canonical identities on usages. A usage gets the canonical
 // key language|file|kind|name when its name has exactly one declaration in
 // the repo (not counting imports); otherwise it stays empty (ambiguous).
-// It also rebuilds the canonical postings.
+// It also builds the canonical index (canonical nameID -> source nameID).
 func (r *repo) enrich() {
 	declCount := map[string]int{}
 	declCanonical := map[string]string{}
@@ -675,7 +672,7 @@ func (r *repo) enrich() {
 			}
 		}
 	}
-	r.byCanonical = make(map[NameID]map[FileID][]UsageRef)
+	r.canonicalIndex = make(map[NameID]NameID)
 	for nameID, byFile := range r.usages {
 		name := r.nameOf(nameID)
 		canonical := ""
@@ -683,19 +680,13 @@ func (r *repo) enrich() {
 			canonical = declCanonical[name]
 		}
 		canonicalID := r.internName(canonical)
-		for fid, refs := range byFile {
-			for i := range refs {
-				refs[i].Canonical = canonicalID
+		for fid := range byFile {
+			for i := range byFile[fid] {
+				byFile[fid][i].Canonical = canonicalID
 			}
-			if canonical == "" {
-				continue
-			}
-			c := r.byCanonical[canonicalID]
-			if c == nil {
-				c = make(map[FileID][]UsageRef)
-				r.byCanonical[canonicalID] = c
-			}
-			c[fid] = append(c[fid], refs...)
+		}
+		if canonical != "" {
+			r.canonicalIndex[canonicalID] = nameID
 		}
 	}
 }
@@ -741,25 +732,13 @@ func (s *MemoryStore) estimateMemory(r *repo) int64 {
 		}
 	}
 
-	// fileUsages mirror: same structure, same total UsageRef count.
-	var fileUsageCount int64
-	for _, nameMap := range r.fileUsages {
-		total += 48
-		for _, refs := range nameMap {
-			total += 48
-			total += int64(len(refs)) * 40
-			fileUsageCount += int64(len(refs))
-		}
+	// fileUsageNames: map[FileID][]NameID (one slice per file).
+	for _, nameIDs := range r.fileUsageNames {
+		total += 48 + int64(len(nameIDs))*8
 	}
 
-	// byCanonical: subset of usages (unambiguous names only).
-	for _, byFile := range r.byCanonical {
-		total += 48
-		for _, refs := range byFile {
-			total += 48
-			total += int64(len(refs)) * 40
-		}
-	}
+	// canonicalIndex: map[NameID]NameID (one entry per unambiguous name).
+	total += int64(len(r.canonicalIndex)) * (8 + 48)
 
 	// complexity slice: RankedComplexity = File string + ComplexityEntry.
 	total += int64(len(r.complexity)) * 64
